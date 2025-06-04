@@ -1,7 +1,7 @@
 cc = gcc
 PKG = libpcap
 
-CFLAGS = -Wall -Wextra -Werror -Wold-style-definition -pedantic -std=c11 -ggdb `pkg-config --cflags $(PKG)`
+CFLAGS = -Wall -Wextra -Werror -Wold-style-definition -pedantic -std=gnu11 -ggdb `pkg-config --cflags $(PKG)`
 LDFLAGS = `pkg-config --libs $(PKG)`
 
 TARGET = dns_sniffer
