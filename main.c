@@ -1,4 +1,5 @@
 #include <pcap.h>
+#include <pcap/pcap.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,8 +77,36 @@ int main(int argc, char **argv) {
   printf("Successfully opened interface '%s' for packet capture.\n",
          selected_if);
 
+  // Set up BPF filter for DNS (UDP port 53)
+  struct bpf_program dns_filter;
+  const char filter_exp[] = "udp port 53";
+
+  // Compile the BPF filter
+  if (pcap_compile(handle, &dns_filter, filter_exp, 0, PCAP_NETMASK_UNKNOWN) ==
+      -1) {
+    fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp,
+            pcap_geterr(handle));
+    pcap_close(handle);
+    pcap_freealldevs(alldevs);
+    return 1;
+  }
+
+  // Install the BPF
+  if (pcap_setfilter(handle, &dns_filter) == -1) {
+    fprintf(stderr, "Could not install filter %s:\n%s\n", filter_exp,
+            pcap_geterr(handle));
+    pcap_freecode(&dns_filter);
+    pcap_close(handle);
+    pcap_freealldevs(alldevs);
+    return 1;
+  }
+
+  pcap_freecode(&dns_filter);
+
+  printf("Applied BPF filter: \"%s\"\n", filter_exp);
+
   // Start packet capture loop
-  pcap_loop(handle, 10, packet_handler, NULL);
+  // pcap_loop(handle, 10, packet_handler, NULL);
 
   pcap_close(handle);
   pcap_freealldevs(alldevs);
