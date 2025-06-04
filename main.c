@@ -21,6 +21,7 @@ int main(void) {
   }
 
   printf("+----------------------------------------+\n");
+
   pcap_freealldevs(alldevs);
   return 0;
 }
