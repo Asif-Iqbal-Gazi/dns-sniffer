@@ -79,12 +79,12 @@ int main(int argc, char **argv) {
 
   // Set up BPF filter for DNS (UDP port 53)
   struct bpf_program dns_filter;
-  const char filter_exp[] = "udp port 53";
+  const char filter_exp[] = "port 53";
+  bpf_u_int32 net_mask = PCAP_NETMASK_UNKNOWN;
 
   // Compile the BPF filter
-  if (pcap_compile(handle, &dns_filter, filter_exp, 0, PCAP_NETMASK_UNKNOWN) ==
-      -1) {
-    fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp,
+  if (pcap_compile(handle, &dns_filter, filter_exp, 0, net_mask) == -1) {
+    fprintf(stderr, "Failed to compile filter %s:\n%s\n", filter_exp,
             pcap_geterr(handle));
     pcap_close(handle);
     pcap_freealldevs(alldevs);
@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
 
   // Install the BPF
   if (pcap_setfilter(handle, &dns_filter) == -1) {
-    fprintf(stderr, "Could not install filter %s:\n%s\n", filter_exp,
+    fprintf(stderr, "Failed to set filter %s:\n%s\n", filter_exp,
             pcap_geterr(handle));
     pcap_freecode(&dns_filter);
     pcap_close(handle);
@@ -101,13 +101,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  printf("Starting packet capture on %s...\nPress Ctrl+C to stop.\n",
+         selected_if);
+
+  // Start packet capture loop, call packet_handler for each packet
+  pcap_loop(handle, -1, packet_handler, NULL);
+
   pcap_freecode(&dns_filter);
-
-  printf("Applied BPF filter: \"%s\"\n", filter_exp);
-
-  // Start packet capture loop
-  // pcap_loop(handle, 10, packet_handler, NULL);
-
   pcap_close(handle);
   pcap_freealldevs(alldevs);
   return 0;
