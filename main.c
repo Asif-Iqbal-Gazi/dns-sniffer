@@ -3,6 +3,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <time.h>
+
+void packet_handler(u_char *user, const struct pcap_pkthdr *header,
+                    const u_char *packet) {
+  (void)user;
+  char time_str[64];
+  time_t pkt_time = header->ts.tv_sec;
+  struct tm *ltime = localtime(&pkt_time);
+  strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
+  printf("[%s.%06ld] Packet length: %d bytes\n", time_str, header->ts.tv_sec,
+         header->len);
+  printf("\nPacket\n: %s", packet);
+}
 
 int main(int argc, char **argv) {
   char errbuf[PCAP_ERRBUF_SIZE];
@@ -62,6 +75,9 @@ int main(int argc, char **argv) {
 
   printf("Successfully opened interface '%s' for packet capture.\n",
          selected_if);
+
+  // Start packet capture loop
+  pcap_loop(handle, 10, packet_handler, NULL);
 
   pcap_close(handle);
   pcap_freealldevs(alldevs);
