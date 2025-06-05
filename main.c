@@ -10,6 +10,14 @@
 #include <sys/types.h>
 #include <time.h>
 
+#define BYTES_PER_LINE 16
+
+// ANSI color macros
+#define COLOR_HEADER "\033[1;34m" // Bold Blue
+#define COLOR_RESET "\033[0m"
+#define COLOR_LABEL "\033[1;33m" // Bold Yellow
+#define COLOR_DATA "\033[0;37m"  // Light gray
+
 void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
                         const u_char *packet) {
   (void)user;
@@ -20,38 +28,63 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
   const struct udphdr *udp_hdr;
   const u_char *dns_payload;
 
-  eth_hdr = (struct ether_header *)packet;
+  // Parse Ethernet header
+  eth_hdr = (const struct ether_header *)packet;
 
-  // Check if IP Packet
-  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) {
-    return;
-  }
+  // Only process IP packets
+  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) return;
 
-  ip_hdr = (struct ip *)(packet + sizeof(struct ether_header));
+  // Parse IP header
+  ip_hdr = (const struct ip *)(packet + sizeof(struct ether_header));
 
-  // Check if the protocol is UDP
-  if (ip_hdr->ip_p != IPPROTO_UDP) {
-    return;
-  }
+  // Only process UDP packets
+  if (ip_hdr->ip_p != IPPROTO_UDP) return;
 
+  // Calculate the actual IP header length
   int ip_header_len = ip_hdr->ip_hl * 4;
-  udp_hdr = (struct udphdr *)((const u_char *)ip_hdr + ip_header_len);
 
-  // Not a DNS packet
-  if (ntohs(udp_hdr->uh_dport) != 53 && ntohs(udp_hdr->uh_sport) != 53) {
-    return;
-  }
+  // Parse UDP header
+  udp_hdr = (const struct udphdr *)((const u_char *)ip_hdr + ip_header_len);
 
-  dns_payload = (u_char *)udp_hdr + sizeof(struct udphdr);
+  // Filter for DNS packets (UDP src or dst port = 53)
+  if (ntohs(udp_hdr->uh_dport) != 53 && ntohs(udp_hdr->uh_sport) != 53) return;
+
+  // Get DNS payload pointer and length
+  dns_payload = (const u_char *)udp_hdr + sizeof(struct udphdr);
   int dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
-  printf("\nDNS packet capture (%d bytes)\n", dns_length);
-  printf("DNS Payload (hex view):\n");
 
-  for (int i = 0; i < dns_length; i += 8) {
+  // Convert timestamp
+  char time_str[64];
+  time_t pkt_time = header->ts.tv_sec;
+  struct tm *ltime = localtime(&pkt_time);
+  strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
+
+  // Extract IPs and Ports
+  char src_ip[INET_ADDRSTRLEN];
+  char dst_ip[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &(ip_hdr->ip_src), src_ip, INET_ADDRSTRLEN);
+  inet_ntop(AF_INET, &(ip_hdr->ip_dst), dst_ip, INET_ADDRSTRLEN);
+  uint16_t src_port = ntohs(udp_hdr->uh_sport);
+  uint16_t dst_port = ntohs(udp_hdr->uh_dport);
+
+  // Start output
+  // clang-format off
+  printf(COLOR_HEADER "\n=============================================\n" COLOR_RESET);
+  printf(COLOR_LABEL "📦 DNS Packet Captured  " COLOR_RESET "(%d bytes)\n", dns_length);
+  printf(COLOR_LABEL "⏰ Timestamp:           " COLOR_RESET "%s.%06ld\n", time_str, header->ts.tv_usec);
+  printf(COLOR_LABEL "🔹 From:                " COLOR_RESET "%s:%d\n", src_ip, src_port);
+  printf(COLOR_LABEL "🔸 To:                  " COLOR_RESET "%s:%d\n", dst_ip, dst_port);
+  printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
+
+  printf(COLOR_LABEL "Offset   Hex Bytes                                      | ASCII\n" COLOR_RESET);
+  printf(COLOR_HEADER "--------------------------------------------------------|----------------\n" COLOR_RESET);
+  // clang-format on
+
+  for (int i = 0; i < dns_length; i += BYTES_PER_LINE) {
     printf("%04x:  ", i);
 
     // Print hex bytes
-    for (int j = 0; j < 8; j++) {
+    for (int j = 0; j < BYTES_PER_LINE; j++) {
       if (i + j < dns_length)
         printf("%02x ", dns_payload[i + j]);
       else
@@ -61,21 +94,15 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
     printf(" | ");
 
     // Print ASCII
-    for (int j = 0; j < 8 && i + j < dns_length; j++) {
+    for (int j = 0; j < BYTES_PER_LINE && i + j < dns_length; j++) {
       unsigned char c = dns_payload[i + j];
       printf("%c", (c >= 32 && c <= 126) ? c : '.');
     }
 
     printf("\n");
   }
-
-  // char time_str[64];
-  // time_t pkt_time = header->ts.tv_sec;
-  // struct tm *ltime = localtime(&pkt_time);
-  // strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
-  // printf("[%s.%06ld] Packet length: %d bytes\n", time_str, header->ts.tv_sec,
-  //        header->len);
-  // printf("\nPacket\n: %s", packet);
+  printf(COLOR_HEADER
+         "=============================================\n" COLOR_RESET);
 }
 
 int main(int argc, char **argv) {
