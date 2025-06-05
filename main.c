@@ -1,21 +1,81 @@
+#include <arpa/inet.h>
+#include <net/ethernet.h>
+#include <netinet/ether.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/udp.h>
 #include <pcap.h>
-#include <pcap/pcap.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
 
-void packet_handler(u_char *user, const struct pcap_pkthdr *header,
-                    const u_char *packet) {
+void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
+                        const u_char *packet) {
   (void)user;
-  char time_str[64];
-  time_t pkt_time = header->ts.tv_sec;
-  struct tm *ltime = localtime(&pkt_time);
-  strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
-  printf("[%s.%06ld] Packet length: %d bytes\n", time_str, header->ts.tv_sec,
-         header->len);
-  printf("\nPacket\n: %s", packet);
+  (void)header;
+
+  const struct ether_header *eth_hdr;
+  const struct ip *ip_hdr;
+  const struct udphdr *udp_hdr;
+  const u_char *dns_payload;
+
+  eth_hdr = (struct ether_header *)packet;
+
+  // Check if IP Packet
+  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) {
+    return;
+  }
+
+  ip_hdr = (struct ip *)(packet + sizeof(struct ether_header));
+
+  // Check if the protocol is UDP
+  if (ip_hdr->ip_p != IPPROTO_UDP) {
+    return;
+  }
+
+  int ip_header_len = ip_hdr->ip_hl * 4;
+  udp_hdr = (struct udphdr *)((const u_char *)ip_hdr + ip_header_len);
+
+  // Not a DNS packet
+  if (ntohs(udp_hdr->uh_dport) != 53 && ntohs(udp_hdr->uh_sport) != 53) {
+    return;
+  }
+
+  dns_payload = (u_char *)udp_hdr + sizeof(struct udphdr);
+  int dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
+  printf("\nDNS packet capture (%d bytes)\n", dns_length);
+  printf("DNS Payload (hex view):\n");
+
+  for (int i = 0; i < dns_length; i += 8) {
+    printf("%04x:  ", i);
+
+    // Print hex bytes
+    for (int j = 0; j < 8; j++) {
+      if (i + j < dns_length)
+        printf("%02x ", dns_payload[i + j]);
+      else
+        printf("   ");
+    }
+
+    printf(" | ");
+
+    // Print ASCII
+    for (int j = 0; j < 8 && i + j < dns_length; j++) {
+      unsigned char c = dns_payload[i + j];
+      printf("%c", (c >= 32 && c <= 126) ? c : '.');
+    }
+
+    printf("\n");
+  }
+
+  // char time_str[64];
+  // time_t pkt_time = header->ts.tv_sec;
+  // struct tm *ltime = localtime(&pkt_time);
+  // strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
+  // printf("[%s.%06ld] Packet length: %d bytes\n", time_str, header->ts.tv_sec,
+  //        header->len);
+  // printf("\nPacket\n: %s", packet);
 }
 
 int main(int argc, char **argv) {
@@ -105,7 +165,7 @@ int main(int argc, char **argv) {
          selected_if);
 
   // Start packet capture loop, call packet_handler for each packet
-  pcap_loop(handle, -1, packet_handler, NULL);
+  pcap_loop(handle, -1, dns_packet_handler, NULL);
 
   pcap_freecode(&dns_filter);
   pcap_close(handle);
