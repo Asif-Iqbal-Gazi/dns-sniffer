@@ -5,6 +5,7 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <pcap.h>
+#include <pcap/pcap.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -18,10 +19,14 @@
 #define COLOR_LABEL "\033[1;33m" // Bold Yellow
 #define COLOR_DATA "\033[0;37m"  // Light gray
 
-void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
-                        const u_char *packet) {
+void print_dns_packet_info(const struct ip *ip_hdr,
+                           const struct udphdr *udp_hdr,
+                           const u_char *dns_payload, int dns_length,
+                           const struct pcap_pkthdr *p_pkt_hdr);
+
+void dns_packet_handler(u_char *user, const struct pcap_pkthdr *p_pkt_hdr,
+                        const u_char *rw_pkt) {
   (void)user;
-  (void)header;
 
   const struct ether_header *eth_hdr;
   const struct ip *ip_hdr;
@@ -29,13 +34,13 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
   const u_char *dns_payload;
 
   // Parse Ethernet header
-  eth_hdr = (const struct ether_header *)packet;
+  eth_hdr = (const struct ether_header *)rw_pkt;
 
   // Only process IP packets
   if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) return;
 
   // Parse IP header
-  ip_hdr = (const struct ip *)(packet + sizeof(struct ether_header));
+  ip_hdr = (const struct ip *)(rw_pkt + sizeof(struct ether_header));
 
   // Only process UDP packets
   if (ip_hdr->ip_p != IPPROTO_UDP) return;
@@ -53,9 +58,15 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
   dns_payload = (const u_char *)udp_hdr + sizeof(struct udphdr);
   int dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
 
-  // Convert timestamp
+  print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, p_pkt_hdr);
+}
+
+void print_dns_packet_info(const struct ip *ip_hdr,
+                           const struct udphdr *udp_hdr,
+                           const u_char *dns_payload, int dns_length,
+                           const struct pcap_pkthdr *p_pkt_hdr) {
   char time_str[64];
-  time_t pkt_time = header->ts.tv_sec;
+  time_t pkt_time = p_pkt_hdr->ts.tv_sec;
   struct tm *ltime = localtime(&pkt_time);
   strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
 
@@ -71,7 +82,7 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *header,
   // clang-format off
   printf(COLOR_HEADER "\n=============================================\n" COLOR_RESET);
   printf(COLOR_LABEL "📦 DNS Packet Captured  " COLOR_RESET "(%d bytes)\n", dns_length);
-  printf(COLOR_LABEL "⏰ Timestamp:           " COLOR_RESET "%s.%06ld\n", time_str, header->ts.tv_usec);
+  printf(COLOR_LABEL "⏰ Timestamp:           " COLOR_RESET "%s.%06ld\n", time_str, p_pkt_hdr->ts.tv_usec);
   printf(COLOR_LABEL "🔹 From:                " COLOR_RESET "%s:%d\n", src_ip, src_port);
   printf(COLOR_LABEL "🔸 To:                  " COLOR_RESET "%s:%d\n", dst_ip, dst_port);
   printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
