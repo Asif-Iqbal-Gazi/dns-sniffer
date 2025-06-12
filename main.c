@@ -116,7 +116,7 @@ void print_dns_packet_info(const struct ip *ip_hdr,
          "=============================================\n" COLOR_RESET);
 }
 
-int main(int argc, char **argv) {
+const char *choose_interface(int argc, char **argv, pcap_if_t **out_all_devs) {
   char errbuf[PCAP_ERRBUF_SIZE];
   pcap_if_t *alldevs, *device;
   const char *selected_if = NULL;
@@ -124,26 +124,25 @@ int main(int argc, char **argv) {
   // Find all network devices
   if (pcap_findalldevs(&alldevs, errbuf) == -1) {
     fprintf(stderr, "Error finding devices: %s\n", errbuf);
-    return 1;
+    return NULL;
   }
 
   if (alldevs == NULL) {
     fprintf(stderr, "No network interfaces found.\n");
-    return 1;
+    return NULL;
   }
 
-  // Check for user-supplied interface
   if (argc > 1) {
-    for (device = alldevs; device != NULL; device = device->next) {
+    // Try to find matching inteface name
+    for (device = alldevs; device; device = device->next) {
       if (strcmp(device->name, argv[1]) == 0) {
         selected_if = device->name;
         break;
       }
     }
     if (!selected_if) {
-      fprintf(stderr, "Provided interface '%s' not found. Exiting.\n", argv[1]);
-      pcap_freealldevs(alldevs);
-      return 1;
+      fprintf(stderr, "Provided inteface %s not found.\n", argv[1]);
+      return NULL;
     }
   } else {
     // No interface provided: list all and select first
@@ -158,6 +157,20 @@ int main(int argc, char **argv) {
     }
     printf("+----------------------------------------+\n");
     printf("Defaulting to: %s\n\n", selected_if);
+  }
+
+  *out_all_devs = alldevs;
+  return selected_if;
+}
+
+int main(int argc, char **argv) {
+  char errbuf[PCAP_ERRBUF_SIZE];
+  pcap_if_t *alldevs = NULL;
+  const char *selected_if = choose_interface(argc, argv, &alldevs);
+
+  if (!selected_if) {
+    pcap_freealldevs(alldevs);
+    return 1;
   }
 
   printf("Using interface: %s\n", selected_if);
