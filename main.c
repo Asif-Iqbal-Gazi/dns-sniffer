@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 
 #define BYTES_PER_LINE 16
 
@@ -164,13 +165,46 @@ const char *choose_interface(int argc, char **argv, pcap_if_t **out_all_devs) {
 }
 
 int main(int argc, char **argv) {
+  char *iface_arg = NULL;
+  char *config_file_path = NULL;
+  int opt;
+
+  while ((opt = getopt(argc, argv, "i:f:h")) != -1) {
+    // clang-format off
+    switch (opt) {
+    case 'i':
+      iface_arg = optarg;
+      break;
+    case 'f':
+      config_file_path = optarg;
+      break;
+    case 'h':
+      printf("Usage: %s [-i interface] [-f config_file]\n", argv[0]);
+      printf("Options:\n");
+      printf("  -i <interface>        Specify network interface to listen on\n");
+      printf("  -f <file>             Path to domain_IP mapping file (CSV format)\n");
+      printf("  -h                    Show this help message\n");
+      return 0;
+    default:
+      fprintf(stderr, "Usage: %s [-i interface] [-f config_file]\n", argv[0]);
+      return 1;
+    }
+    // clang-format on
+  }
+
   char errbuf[PCAP_ERRBUF_SIZE];
   pcap_if_t *alldevs = NULL;
-  const char *selected_if = choose_interface(argc, argv, &alldevs);
+  const char *selected_if =
+      choose_interface(iface_arg ? 2 : 0, (char *[]){"", iface_arg}, &alldevs);
 
   if (!selected_if) {
     pcap_freealldevs(alldevs);
     return 1;
+  }
+
+  // TODO: Config file parsing logic
+  if (config_file_path) {
+    printf("Config file (TODO): %s\n", config_file_path);
   }
 
   printf("Using interface: %s\n", selected_if);
