@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <bits/getopt_core.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
 #include <netinet/in.h>
@@ -7,10 +8,14 @@
 #include <pcap.h>
 #include <pcap/pcap.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#define MAX_DOMAINS 256
+#define MAX_LINE_LEN 256
 
 #define BYTES_PER_LINE 16
 
@@ -19,6 +24,113 @@
 #define COLOR_RESET "\033[0m"
 #define COLOR_LABEL "\033[1;33m" // Bold Yellow
 #define COLOR_DATA "\033[0;37m"  // Light gray
+
+typedef struct {
+  char domain[128];
+  char ip[INET_ADDRSTRLEN];
+} DomainMapEntry;
+
+int domain_count = 0;
+DomainMapEntry domain_map[MAX_DOMAINS];
+
+void print_usage(const char *progname) {
+  // clang-format off
+  printf("Usage: %s [-i interface] [-f domain_map_file]\n", progname);
+  printf("Options:\n");
+  printf("  -i <interface>        Specify network interface to listen on\n");
+  printf("  -f <file>             Path to domain_IP mapping file (CSV format)\n");
+  printf("  -h                    Show this help message\n");
+  // clang-format on
+}
+
+int load_doamin_map(const char *filename) {
+  FILE *fp = fopen(filename, "r");
+  if (!fp) {
+    perror("Error! Could not open file");
+    return -1;
+  }
+
+  char line[MAX_LINE_LEN];
+  while (fgets(line, sizeof(line), fp)) {
+    // Remove trailing newline
+    line[strcspn(line, "\n")] = '\0';
+    // Split on comma
+    char *comma = strchr(line, ',');
+    if (!comma) {
+      fprintf(stderr, "Skipping invalid line (missing comma): %s\n", line);
+      continue;
+    }
+
+    *comma = '\0';
+    char *domain = line;
+    char *ip = comma + 1;
+
+    if (domain_count >= MAX_DOMAINS) {
+      fprintf(stderr, "Too many domain mappings (limit %d)\n", MAX_DOMAINS);
+      break;
+    }
+    strncpy(domain_map[domain_count].domain, domain, strlen(domain));
+    strncpy(domain_map[domain_count].ip, ip, INET_ADDRSTRLEN);
+    domain_count++;
+  }
+
+  fclose(fp);
+  printf("Loaded %d comain mapping(s).\n", domain_count);
+  return 0;
+}
+
+const char *choose_interface(const char *requested_if) {
+  char errbuf[PCAP_ERRBUF_SIZE];
+  pcap_if_t *alldevs, *dev;
+  const char *selected_if = NULL;
+
+  // Find all network devices
+  if (pcap_findalldevs(&alldevs, errbuf) == -1) {
+    fprintf(stderr, "Error finding devices: %s\n", errbuf);
+    return NULL;
+  }
+
+  if (alldevs == NULL) {
+    fprintf(stderr, "No network interfaces found.\n");
+    return NULL;
+  }
+
+  if (requested_if) {
+    // Try to find matching inteface name
+    for (dev = alldevs; dev; dev = dev->next) {
+      if (strcmp(dev->name, requested_if) == 0) {
+        selected_if = dev->name;
+        break;
+      }
+    }
+
+    if (!selected_if) {
+      fprintf(stderr, "Inteface %s not found.\n", requested_if);
+      pcap_freealldevs(alldevs);
+      return NULL;
+    }
+  } else {
+    // No interface provided: list all and select first
+    printf("\n+----------------------------------------+\n");
+    printf("| No interface provided.                 |\n");
+    printf("| Available interfaces:                  |\n");
+    printf("+----------------------------------------+\n");
+    for (dev = alldevs; dev != NULL; dev = dev->next) {
+      printf("- %s\n", dev->name);
+    }
+    selected_if = alldevs->name;
+    printf("+----------------------------------------+\n");
+    printf("Defaulting to first: %s\n\n", selected_if);
+  }
+
+  // After hours of debugging:
+  // pcap_freealldevs frees the memory assocaited with dev->name
+  char *selected_if_copy = NULL;
+  if (selected_if) selected_if_copy = strdup(selected_if);
+
+  pcap_freealldevs(alldevs);
+  return selected_if_copy;
+}
 
 void print_dns_packet_info(const struct ip *ip_hdr,
                            const struct udphdr *udp_hdr,
@@ -117,107 +229,69 @@ void print_dns_packet_info(const struct ip *ip_hdr,
          "=============================================\n" COLOR_RESET);
 }
 
-const char *choose_interface(int argc, char **argv, pcap_if_t **out_all_devs) {
-  char errbuf[PCAP_ERRBUF_SIZE];
-  pcap_if_t *alldevs, *device;
-  const char *selected_if = NULL;
-
-  // Find all network devices
-  if (pcap_findalldevs(&alldevs, errbuf) == -1) {
-    fprintf(stderr, "Error finding devices: %s\n", errbuf);
-    return NULL;
-  }
-
-  if (alldevs == NULL) {
-    fprintf(stderr, "No network interfaces found.\n");
-    return NULL;
-  }
-
-  if (argc > 1) {
-    // Try to find matching inteface name
-    for (device = alldevs; device; device = device->next) {
-      if (strcmp(device->name, argv[1]) == 0) {
-        selected_if = device->name;
-        break;
-      }
-    }
-    if (!selected_if) {
-      fprintf(stderr, "Provided inteface %s not found.\n", argv[1]);
-      return NULL;
-    }
-  } else {
-    // No interface provided: list all and select first
-    selected_if = alldevs->name;
-
-    printf("\n+----------------------------------------+\n");
-    printf("| No interface provided.                 |\n");
-    printf("| Available interfaces:                  |\n");
-    printf("+----------------------------------------+\n");
-    for (device = alldevs; device != NULL; device = device->next) {
-      printf("- %s\n", device->name);
-    }
-    printf("+----------------------------------------+\n");
-    printf("Defaulting to: %s\n\n", selected_if);
-  }
-
-  *out_all_devs = alldevs;
-  return selected_if;
-}
-
 int main(int argc, char **argv) {
-  char *iface_arg = NULL;
-  char *config_file_path = NULL;
+  char *iface = NULL;
+  char *file_path = NULL;
   int opt;
 
-  while ((opt = getopt(argc, argv, "i:f:h")) != -1) {
-    // clang-format off
+  while ((opt = getopt(argc, argv, "i:f:h:")) != -1) {
     switch (opt) {
     case 'i':
-      iface_arg = optarg;
+      iface = optarg;
       break;
     case 'f':
-      config_file_path = optarg;
+      file_path = optarg;
       break;
     case 'h':
-      printf("Usage: %s [-i interface] [-f config_file]\n", argv[0]);
-      printf("Options:\n");
-      printf("  -i <interface>        Specify network interface to listen on\n");
-      printf("  -f <file>             Path to domain_IP mapping file (CSV format)\n");
-      printf("  -h                    Show this help message\n");
+      print_usage(argv[0]);
       return 0;
+    case '?': // Handle unknown options or missing arguments for options
+      fprintf(stderr, "Unknown option or missing argument -%c\n", optopt);
+      print_usage(argv[0]);
+      return 1;
     default:
-      fprintf(stderr, "Usage: %s [-i interface] [-f config_file]\n", argv[0]);
+      print_usage(argv[0]);
       return 1;
     }
-    // clang-format on
   }
 
-  char errbuf[PCAP_ERRBUF_SIZE];
-  pcap_if_t *alldevs = NULL;
-  const char *selected_if =
-      choose_interface(iface_arg ? 2 : 0, (char *[]){"", iface_arg}, &alldevs);
-
-  if (!selected_if) {
-    pcap_freealldevs(alldevs);
+  // After the while loop, optind is the index of the first non-option argument.
+  // We handle this case here.
+  if (optind < argc) {
+    fprintf(stderr, "Error: Unexpected non-option arguments provided.\n");
+    for (int index = optind; index < argc; index++) {
+      fprintf(stderr, "Non-option argument: %s\n", argv[index]);
+    }
+    print_usage(argv[0]);
     return 1;
   }
 
-  // TODO: Config file parsing logic
-  if (config_file_path) {
-    printf("Config file (TODO): %s\n", config_file_path);
+  if (!file_path) {
+    fprintf(stderr, "Error: Domain map file not specified. Use -f option.\n");
+    return 1;
   }
+
+  if (load_doamin_map(file_path) != 0) {
+    fprintf(stderr, "File %s not found.\n", file_path);
+    return 1;
+  }
+
+  const char *selected_if = choose_interface(iface);
+  if (!selected_if) return 1;
 
   printf("Using interface: %s\n", selected_if);
   printf("+----------------------------------------+\n");
 
+  char errbuf[PCAP_ERRBUF_SIZE];
   // Open the selected interface for packet capture
   pcap_t *handle = pcap_open_live(selected_if, 65535, 1, 1000, errbuf);
   if (!handle) {
     fprintf(stderr, "Failed to open interface '%s':\n%s\n", selected_if,
             errbuf);
-    pcap_freealldevs(alldevs);
     return 1;
   }
+
+  // free((char *)selected_if);
 
   printf("Successfully opened interface '%s' for packet capture.\n",
          selected_if);
@@ -232,7 +306,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to compile filter %s:\n%s\n", filter_exp,
             pcap_geterr(handle));
     pcap_close(handle);
-    pcap_freealldevs(alldevs);
     return 1;
   }
 
@@ -242,7 +315,6 @@ int main(int argc, char **argv) {
             pcap_geterr(handle));
     pcap_freecode(&dns_filter);
     pcap_close(handle);
-    pcap_freealldevs(alldevs);
     return 1;
   }
 
@@ -254,6 +326,5 @@ int main(int argc, char **argv) {
 
   pcap_freecode(&dns_filter);
   pcap_close(handle);
-  pcap_freealldevs(alldevs);
   return 0;
 }
