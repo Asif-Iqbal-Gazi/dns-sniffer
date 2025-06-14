@@ -1,5 +1,4 @@
 #include <arpa/inet.h>
-#include <bits/getopt_core.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
 #include <netinet/in.h>
@@ -37,16 +36,16 @@ void print_usage(const char *progname) {
   // clang-format off
   printf("Usage: %s [-i interface] [-f domain_map_file]\n", progname);
   printf("Options:\n");
-  printf("  -i <interface>        Specify network interface to listen on\n");
-  printf("  -f <file>             Path to domain_IP mapping file (CSV format)\n");
+  printf("  -i <interface>        Specify network interface to listen on (optional)\n");
+  printf("  -f <file>             Path to domain_IP mapping file (CSV format) (mandatory)\n");
   printf("  -h                    Show this help message\n");
   // clang-format on
 }
 
-int load_doamin_map(const char *filename) {
+int load_domain_map(const char *filename) {
   FILE *fp = fopen(filename, "r");
   if (!fp) {
-    perror("Error! Could not open file");
+    perror("Error: Could not open domain map file");
     return -1;
   }
 
@@ -57,7 +56,8 @@ int load_doamin_map(const char *filename) {
     // Split on comma
     char *comma = strchr(line, ',');
     if (!comma) {
-      fprintf(stderr, "Skipping invalid line (missing comma): %s\n", line);
+      fprintf(stderr, "Warning: Skipping invalid line (missing comma): %s\n",
+              line);
       continue;
     }
 
@@ -66,16 +66,22 @@ int load_doamin_map(const char *filename) {
     char *ip = comma + 1;
 
     if (domain_count >= MAX_DOMAINS) {
-      fprintf(stderr, "Too many domain mappings (limit %d)\n", MAX_DOMAINS);
+      fprintf(stderr, "Error: Too many domain mappings (limit %d)\n",
+              MAX_DOMAINS);
       break;
     }
-    strncpy(domain_map[domain_count].domain, domain, strlen(domain));
-    strncpy(domain_map[domain_count].ip, ip, INET_ADDRSTRLEN);
+    strncpy(domain_map[domain_count].domain, domain,
+            sizeof(domain_map[domain_count].domain) - 1);
+    domain_map[domain_count]
+        .domain[sizeof(domain_map[domain_count].domain) - 1] = '\0';
+    strncpy(domain_map[domain_count].ip, ip,
+            sizeof(domain_map[domain_count].ip) - 1);
+    domain_map[domain_count].ip[sizeof(domain_map[domain_count].ip) - 1] = '\0';
     domain_count++;
   }
 
   fclose(fp);
-  printf("Loaded %d comain mapping(s).\n", domain_count);
+  printf("Loaded %d domain mapping(s).\n", domain_count);
   return 0;
 }
 
@@ -105,7 +111,7 @@ const char *choose_interface(const char *requested_if) {
     }
 
     if (!selected_if) {
-      fprintf(stderr, "Inteface %s not found.\n", requested_if);
+      fprintf(stderr, "Error: Interface %s not found.\n", requested_if);
       pcap_freealldevs(alldevs);
       return NULL;
     }
@@ -137,8 +143,8 @@ void print_dns_packet_info(const struct ip *ip_hdr,
                            const u_char *dns_payload, int dns_length,
                            const struct pcap_pkthdr *p_pkt_hdr);
 
-void dns_packet_handler(u_char *user, const struct pcap_pkthdr *p_pkt_hdr,
-                        const u_char *rw_pkt) {
+void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
+                        const u_char *raw_packet) {
   (void)user;
 
   const struct ether_header *eth_hdr;
@@ -147,13 +153,13 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *p_pkt_hdr,
   const u_char *dns_payload;
 
   // Parse Ethernet header
-  eth_hdr = (const struct ether_header *)rw_pkt;
+  eth_hdr = (const struct ether_header *)raw_packet;
 
   // Only process IP packets
   if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) return;
 
   // Parse IP header
-  ip_hdr = (const struct ip *)(rw_pkt + sizeof(struct ether_header));
+  ip_hdr = (const struct ip *)(raw_packet + sizeof(struct ether_header));
 
   // Only process UDP packets
   if (ip_hdr->ip_p != IPPROTO_UDP) return;
@@ -171,7 +177,7 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *p_pkt_hdr,
   dns_payload = (const u_char *)udp_hdr + sizeof(struct udphdr);
   int dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
 
-  print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, p_pkt_hdr);
+  print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header);
 }
 
 void print_dns_packet_info(const struct ip *ip_hdr,
@@ -234,7 +240,9 @@ int main(int argc, char **argv) {
   char *file_path = NULL;
   int opt;
 
-  while ((opt = getopt(argc, argv, "i:f:h:")) != -1) {
+  opterr = 0;
+
+  while ((opt = getopt(argc, argv, "i:f:h")) != -1) {
     switch (opt) {
     case 'i':
       iface = optarg;
@@ -245,11 +253,11 @@ int main(int argc, char **argv) {
     case 'h':
       print_usage(argv[0]);
       return 0;
-    case '?': // Handle unknown options or missing arguments for options
-      fprintf(stderr, "Unknown option or missing argument -%c\n", optopt);
-      print_usage(argv[0]);
-      return 1;
-    default:
+    case '?':
+      if (optopt == 'i' || optopt == 'f')
+        fprintf(stderr, "Error: Option '-%c' requires an arguments.\n", optopt);
+      else
+        fprintf(stderr, "Error: Unknown option -%c\n", optopt);
       print_usage(argv[0]);
       return 1;
     }
@@ -268,13 +276,11 @@ int main(int argc, char **argv) {
 
   if (!file_path) {
     fprintf(stderr, "Error: Domain map file not specified. Use -f option.\n");
+    print_usage(argv[0]);
     return 1;
   }
 
-  if (load_doamin_map(file_path) != 0) {
-    fprintf(stderr, "File %s not found.\n", file_path);
-    return 1;
-  }
+  if (load_domain_map(file_path) != 0) return 1;
 
   const char *selected_if = choose_interface(iface);
   if (!selected_if) return 1;
@@ -286,15 +292,16 @@ int main(int argc, char **argv) {
   // Open the selected interface for packet capture
   pcap_t *handle = pcap_open_live(selected_if, 65535, 1, 1000, errbuf);
   if (!handle) {
-    fprintf(stderr, "Failed to open interface '%s':\n%s\n", selected_if,
+    fprintf(stderr, "Error: Failed to open interface '%s':\n%s\n", selected_if,
             errbuf);
+    free((char *)selected_if);
     return 1;
   }
 
-  // free((char *)selected_if);
+  free((char *)selected_if);
 
   printf("Successfully opened interface '%s' for packet capture.\n",
-         selected_if);
+         iface ? iface : "(default iface)");
 
   // Set up BPF filter for DNS (UDP port 53)
   struct bpf_program dns_filter;
@@ -303,7 +310,7 @@ int main(int argc, char **argv) {
 
   // Compile the BPF filter
   if (pcap_compile(handle, &dns_filter, filter_exp, 0, net_mask) == -1) {
-    fprintf(stderr, "Failed to compile filter %s:\n%s\n", filter_exp,
+    fprintf(stderr, "Error: Failed to compile filter %s:\n%s\n", filter_exp,
             pcap_geterr(handle));
     pcap_close(handle);
     return 1;
@@ -311,7 +318,7 @@ int main(int argc, char **argv) {
 
   // Install the BPF
   if (pcap_setfilter(handle, &dns_filter) == -1) {
-    fprintf(stderr, "Failed to set filter %s:\n%s\n", filter_exp,
+    fprintf(stderr, "Error: Failed to set filter %s:\n%s\n", filter_exp,
             pcap_geterr(handle));
     pcap_freecode(&dns_filter);
     pcap_close(handle);
@@ -319,7 +326,7 @@ int main(int argc, char **argv) {
   }
 
   printf("Starting packet capture on %s...\nPress Ctrl+C to stop.\n",
-         selected_if);
+         iface ? iface : "(default interface)");
 
   // Start packet capture loop, call packet_handler for each packet
   pcap_loop(handle, -1, dns_packet_handler, NULL);
