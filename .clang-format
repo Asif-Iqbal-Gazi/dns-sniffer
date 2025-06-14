@@ -1,7 +1,55 @@
 BasedOnStyle: LLVM
-AllowShortIfStatementsOnASingleLine: true
-AllowShortLoopsOnASingleLine: true
-AllowShortFunctionsOnASingleLine: Inline
+
+# --- Indentation ---
+IndentWidth: 2  # 2 is default for LLVM.
+TabWidth: 2     # Should match IndentWidth if UseTab is Never.
+UseTab: Never
+AlignConsecutiveAssignments: true # Align '=' signs
+AlignConsecutiveDeclarations: true # Align variable names in declarations
+
+# --- Brace Wrapping (K&R/Egyptian Brace Style) ---
 BreakBeforeBraces: Custom
 BraceWrapping:
-  AfterControlStatement: false
+  AfterCaseLabel: false        # case X: { ... }
+  AfterControlStatement: false # if (...) { ... }
+  AfterEnum: false             # enum E { ... }
+  AfterFunction: false         # void func() { ... } -- Key change from Linux Kernel style
+  AfterNamespace: false        # namespace N { ... }
+  AfterStruct: false           # struct S { ... }
+  AfterUnion: false            # union U { ... }
+  AfterExternBlock: false      # extern "C" { ... }
+  BeforeCatch: false           # } catch (...) { (C++ specific)
+  BeforeElse: false            # } else {
+  BeforeLambdaBody: false      # C++ specific
+  BeforeWhile: false           # } while (...) (for do/while loops)
+  SplitEmptyFunction: true     # void func() {}
+  SplitEmptyRecord: true       # struct S {};
+  SplitEmptyNamespace: true    # namespace N {}
+
+# --- Line Breaking & Short Statements ---
+ColumnLimit: 100
+AllowShortIfStatementsOnASingleLine: true # if (condition) return;
+AllowShortLoopsOnASingleLine: true        # for (int i=0; i<N; ++i) do_something();
+AllowShortFunctionsOnASingleLine: Inline  # void func() { return; } (for very short functions)
+BreakBeforeBinaryOperators: None          # Keep operators with their right operand (e.g., a + b)
+BreakBeforeTernaryOperators: true         # Break before '?' and ':' in ternary operator
+
+# --- Spacing ---
+SpaceBeforeParens: ControlStatements # 'if ()', 'for ()', etc.
+SpaceBeforeSquareBrackets: false
+SpacesInAngles: false # For C++ templates: std::vector<int>
+SpacesInCStyleCastParentheses: false # (int)x
+SpacesInParentheses: false # ( a + b )
+SpacesInSquareBrackets: false # array[ index ]
+SpacesBeforeTrailingComments: 1 # Number of spaces before a line comment // like this
+
+# --- Pointer & Reference Alignment ---
+PointerAlignment: Left # int *ptr; (LLVM default)
+ReferenceAlignment: Left # int &ref (C++ specific)
+
+# --- Blank Lines ---
+MaxEmptyLinesToKeep: 1 # Avoids excessive blank lines.
+
+# --- Include Formatting ---
+IncludeBlocks: Regroup # Groups includes like <sys/types.h>, "my_header.h"
+SortIncludes: true # Sorts includes alphabetically within blocks.
