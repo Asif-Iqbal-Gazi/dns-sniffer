@@ -42,20 +42,20 @@ Captured using `tcpdump -X -s 0 udp port 53`:
 
 ### 🧱 1. Ethernet Header (14 bytes)
 
-| Field           | Bytes             | Description               |
-|----------------|-------------------|---------------------------|
-| Dest MAC       | `00 0c 29 b7 2c 92`| Destination MAC address   |
-| Src MAC        | `00 50 56 c0 00 08`| Source MAC address        |
-| EtherType      | `08 00`           | IPv4                      |
+| Field           | Bytes              | Description               |
+|-----------------|--------------------|---------------------------|
+| Dest MAC        | `00 0c 29 b7 2c 92`| Destination MAC address   |
+| Src MAC         | `00 50 56 c0 00 08`| Source MAC address        |
+| EtherType       | `08 00`            | IPv4                      |
 
 ---
 
 ### 🌐 2. IPv4 Header (20 bytes)
 
-| Field           | Bytes             | Description                        |
-|----------------|-------------------|------------------------------------|
+| Field           | Bytes            | Description                        |
+|-----------------|------------------|------------------------------------|
 | Version/IHL     | `45`             | IPv4, header length = 5×4 = 20B    |
-| Total Length     | `00 3c`         | 60 bytes total                     |
+| Total Length    | `00 3c`          | 60 bytes total                     |
 | Protocol        | `11`             | UDP (17)                           |
 | Src IP          | `c0 a8 38 66`    | 192.168.56.102                     |
 | Dst IP          | `c0 a8 38 01`    | 192.168.56.1                       |
@@ -64,9 +64,9 @@ Captured using `tcpdump -X -s 0 udp port 53`:
 
 ### 📬 3. UDP Header (8 bytes)
 
-| Field           | Bytes             | Description                        |
+| Field          | Bytes             | Description                        |
 |----------------|-------------------|------------------------------------|
-| Src Port       | `d3 63`           | Random ephemeral port (54115)     |
+| Src Port       | `d3 63`           | Random ephemeral port (54115)      |
 | Dst Port       | `00 35`           | Port 53 (DNS)                      |
 | Length         | `00 28`           | 40 bytes total                     |
 
@@ -74,7 +74,7 @@ Captured using `tcpdump -X -s 0 udp port 53`:
 
 ### 🌍 4. DNS Message (Starts Here)
 
-| Field               | Bytes             | Description                   |
+| Field              | Bytes             | Description                   |
 |--------------------|-------------------|-------------------------------|
 | Transaction ID     | `a1 22`           | Client-chosen ID              |
 | Flags              | `01 00`           | Standard query                |
@@ -98,7 +98,6 @@ struct ip *ip = (struct ip *)(packet + sizeof(struct ether_header));
 struct udphdr *udp = (struct udphdr *)((u_char *)ip + ip_header_len);
 u_char *dns_payload = (u_char *)udp + sizeof(struct udphdr);
 ```
-
 You can build robust DNS sniffers by understanding and navigating this structure.
 
 ---
