@@ -1,3 +1,5 @@
+#include "dns_protocol.h"
+
 #include <arpa/inet.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
@@ -5,10 +7,11 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <pcap.h>
-#include <pcap/pcap.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -29,10 +32,10 @@ typedef struct {
   char ip[INET_ADDRSTRLEN];
 } DomainMapEntry;
 
-int            domain_count = 0;
+int domain_count = 0;
 DomainMapEntry domain_map[MAX_DOMAINS];
 
-void print_usage(const char* progname) {
+void print_usage(const char *progname) {
   // clang-format off
   printf("Usage: %s [-i interface] [-f domain_map_file]\n", progname);
   printf("Options:\n");
@@ -42,8 +45,8 @@ void print_usage(const char* progname) {
   // clang-format on
 }
 
-int load_domain_map(const char* filename) {
-  FILE* fp = fopen(filename, "r");
+int load_domain_map(const char *filename) {
+  FILE *fp = fopen(filename, "r");
   if (!fp) {
     perror("Error: Could not open domain map file");
     return -1;
@@ -54,23 +57,28 @@ int load_domain_map(const char* filename) {
     // Remove trailing newline
     line[strcspn(line, "\n")] = '\0';
     // Split on comma
-    char* comma = strchr(line, ',');
+    char *comma = strchr(line, ',');
     if (!comma) {
-      fprintf(stderr, "Warning: Skipping invalid line (missing comma): %s\n", line);
+      fprintf(stderr, "Warning: Skipping invalid line (missing comma): %s\n",
+              line);
       continue;
     }
 
-    *comma       = '\0';
-    char* domain = line;
-    char* ip     = comma + 1;
+    *comma = '\0';
+    char *domain = line;
+    char *ip = comma + 1;
 
     if (domain_count >= MAX_DOMAINS) {
-      fprintf(stderr, "Error: Too many domain mappings (limit %d)\n", MAX_DOMAINS);
+      fprintf(stderr, "Error: Too many domain mappings (limit %d)\n",
+              MAX_DOMAINS);
       break;
     }
-    strncpy(domain_map[domain_count].domain, domain, sizeof(domain_map[domain_count].domain) - 1);
-    domain_map[domain_count].domain[sizeof(domain_map[domain_count].domain) - 1] = '\0';
-    strncpy(domain_map[domain_count].ip, ip, sizeof(domain_map[domain_count].ip) - 1);
+    strncpy(domain_map[domain_count].domain, domain,
+            sizeof(domain_map[domain_count].domain) - 1);
+    domain_map[domain_count]
+        .domain[sizeof(domain_map[domain_count].domain) - 1] = '\0';
+    strncpy(domain_map[domain_count].ip, ip,
+            sizeof(domain_map[domain_count].ip) - 1);
     domain_map[domain_count].ip[sizeof(domain_map[domain_count].ip) - 1] = '\0';
     domain_count++;
   }
@@ -80,10 +88,10 @@ int load_domain_map(const char* filename) {
   return 0;
 }
 
-const char* choose_interface(const char* requested_if) {
-  char        errbuf[PCAP_ERRBUF_SIZE];
-  pcap_if_t * alldevs, *dev;
-  const char* selected_if = NULL;
+const char *choose_interface(const char *requested_if) {
+  char errbuf[PCAP_ERRBUF_SIZE];
+  pcap_if_t *alldevs, *dev;
+  const char *selected_if = NULL;
 
   // Find all network devices
   if (pcap_findalldevs(&alldevs, errbuf) == -1) {
@@ -126,60 +134,47 @@ const char* choose_interface(const char* requested_if) {
 
   // After hours of debugging:
   // pcap_freealldevs frees the memory assocaited with dev->name
-  char* selected_if_copy = NULL;
-  if (selected_if) selected_if_copy = strdup(selected_if);
+  char *selected_if_copy = NULL;
+  if (selected_if)
+    selected_if_copy = strdup(selected_if);
 
   pcap_freealldevs(alldevs);
   return selected_if_copy;
 }
 
-void print_dns_packet_info(const struct ip* ip_hdr, const struct udphdr* udp_hdr,
-                           const u_char* dns_payload, int dns_length,
-                           const struct pcap_pkthdr* p_pkt_hdr);
+// Convert DNS name format to dotted domain (e.g: 3www6google3com0 ->
+// www.google.com)
+int parse_dns_query_name(const uint8_t *payload, int payload_len, int offset,
+                         char *output, int max_len) {
+  int curr_pos = offset; // Current reading position in DNS paylaod
+  int output_idx = 0;    // Curretn wrting position in the output buffer
 
-void dns_packet_handler(u_char* user, const struct pcap_pkthdr* pkt_header,
-                        const u_char* raw_packet) {
-  (void)user;
+  while (curr_pos < payload_len) {
+    uint8_t len_byte = payload[curr_pos++];
+    if (len_byte == 0)
+      break; // End of domain name
 
-  const struct ether_header* eth_hdr;
-  const struct ip*           ip_hdr;
-  const struct udphdr*       udp_hdr;
-  const u_char*              dns_payload;
+    if (len_byte + curr_pos > payload_len ||
+        output_idx + len_byte + 1 >= max_len)
+      return -1;
 
-  // Parse Ethernet header
-  eth_hdr = (const struct ether_header*)raw_packet;
-
-  // Only process IP packets
-  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) return;
-
-  // Parse IP header
-  ip_hdr = (const struct ip*)(raw_packet + sizeof(struct ether_header));
-
-  // Only process UDP packets
-  if (ip_hdr->ip_p != IPPROTO_UDP) return;
-
-  // Calculate the actual IP header length
-  int ip_header_len = ip_hdr->ip_hl * 4;
-
-  // Parse UDP header
-  udp_hdr = (const struct udphdr*)((const u_char*)ip_hdr + ip_header_len);
-
-  // Filter for DNS packets (UDP src or dst port = 53)
-  if (ntohs(udp_hdr->uh_dport) != 53 && ntohs(udp_hdr->uh_sport) != 53) return;
-
-  // Get DNS payload pointer and length
-  dns_payload    = (const u_char*)udp_hdr + sizeof(struct udphdr);
-  int dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
-
-  print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header);
+    if (output_idx > 0)
+      output[output_idx++] = '.';
+    memcpy(output + output_idx, payload + curr_pos, len_byte);
+    output_idx += len_byte;
+    curr_pos += len_byte;
+  }
+  output[output_idx] = '\0';
+  return curr_pos;
 }
 
-void print_dns_packet_info(const struct ip* ip_hdr, const struct udphdr* udp_hdr,
-                           const u_char* dns_payload, int dns_length,
-                           const struct pcap_pkthdr* p_pkt_hdr) {
-  char       time_str[64];
-  time_t     pkt_time = p_pkt_hdr->ts.tv_sec;
-  struct tm* ltime    = localtime(&pkt_time);
+void print_dns_packet_info(const struct ip *ip_hdr,
+                           const struct udphdr *udp_hdr,
+                           const uint8_t *dns_payload, int dns_length,
+                           const struct pcap_pkthdr *p_pkt_hdr) {
+  char time_str[64];
+  time_t pkt_time = p_pkt_hdr->ts.tv_sec;
+  struct tm *ltime = localtime(&pkt_time);
   strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
 
   // Extract IPs and Ports
@@ -224,13 +219,123 @@ void print_dns_packet_info(const struct ip* ip_hdr, const struct udphdr* udp_hdr
 
     printf("\n");
   }
-  printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
+  printf(COLOR_HEADER
+         "=============================================\n" COLOR_RESET);
 }
 
-int main(int argc, char** argv) {
-  char* iface     = NULL;
-  char* file_path = NULL;
-  int   opt;
+void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
+                        const u_char *raw_packet) {
+  (void)user;
+
+  const struct ether_header *eth_hdr;
+  const struct ip *ip_hdr;
+  const struct udphdr *udp_hdr;
+  const uint8_t *dns_payload;
+
+  // Parse Ethernet header
+  eth_hdr = (const struct ether_header *)raw_packet;
+  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP)
+    return;
+
+  // Parse IP header
+  ip_hdr = (const struct ip *)(raw_packet + sizeof(struct ether_header));
+  uint32_t ip_header_len = ip_hdr->ip_hl * 4;
+  // Basic IP length validation
+  if (ip_header_len < 20 || ip_header_len > ip_hdr->ip_len * 4)
+    return;
+
+  // Only process UDP packets
+  if (ip_hdr->ip_p != IPPROTO_UDP)
+    return;
+
+  // Parse UDP header
+  udp_hdr = (const struct udphdr *)((const uint8_t *)ip_hdr + ip_header_len);
+
+  // Filter for DNS packets (UDP src or dst port = 53)
+  if (ntohs(udp_hdr->uh_dport) != DNS_PORT &&
+      ntohs(udp_hdr->uh_sport) != DNS_PORT)
+    return;
+
+  // Get DNS payload pointer and length
+  dns_payload = (const uint8_t *)udp_hdr + sizeof(struct udphdr);
+  uint32_t dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
+
+  // Only process DNS packet
+  if (dns_length < sizeof(dns_header_t))
+    return;
+  const dns_header_t *dns_header = (const dns_header_t *)dns_payload;
+
+  // Get the flags
+  uint16_t flags_host = ntohs(dns_header->flags);
+
+  // Fliter for DNS Queries (QR bit = 0)
+  if (flags_host & 0x8000)
+    return;
+
+  // Get number of questions
+  uint16_t qdcount = ntohs(dns_header->qdcount);
+  if (qdcount == 0)
+    return;
+  if (qdcount > 1) {
+    fprintf(stderr,
+            "Warning: DNS query with multiple questions (%hu) "
+            "received.\nProcessing only "
+            "the first for now.\n",
+            qdcount);
+  }
+
+  char queried_domain[DNS_MAX_NAME_LENGTH + 1];
+  uint32_t current_dns_offset =
+      sizeof(dns_header_t); // Start of Question section is after the DNS header
+
+  // Parse the doamin name
+  int name_len_in_packet =
+      parse_dns_query_name(dns_payload, dns_length, current_dns_offset,
+                           queried_domain, sizeof(queried_domain));
+  if (name_len_in_packet < 0) {
+    fprintf(stderr, "Error: Failed to parse domain name. Skipping packet.\n");
+    return;
+  }
+
+  // Advance past the QNAME to get to QTYPE and QCLASS
+  current_dns_offset += name_len_in_packet;
+
+  // Check bounds for QTYPE and QCLASS (2 bytes each)
+  if (current_dns_offset + sizeof(u_int16_t) * 2 > dns_length) {
+    fprintf(stderr,
+            "Error: DNS packet too short for QTYPTE/QCLASS. Skipping packet\n");
+    return;
+  }
+
+  // Extract QTYPE and QCLASS
+  const uint8_t *qtype_ptr = dns_payload + current_dns_offset;
+  uint16_t qtype = ntohs(*(const uint16_t *)qtype_ptr);
+  uint16_t qclass =
+      ntohs(*(uint16_t *)(dns_payload + current_dns_offset + sizeof(uint16_t)));
+
+  printf(COLOR_LABEL "Queried domain:         " COLOR_RESET "%s\n",
+         queried_domain);
+
+  printf("QTYPE: %hu, QCLASS: %hu\n", qtype, qclass);
+
+  // Check for A record and match with doamin map
+  if (qtype == DNS_TYPE_A && qclass == DNS_CLASS_IN) {
+    for (int i = 0; i < domain_count; i++) {
+      if (strcasecmp(queried_domain, domain_map[i].domain) == 0) {
+        printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain,
+               domain_map[i].ip);
+        print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length,
+                              pkt_header);
+        break;
+      }
+    }
+  }
+}
+
+int main(int argc, char **argv) {
+  char *iface = NULL;
+  char *file_path = NULL;
+  int opt;
 
   opterr = 0;
 
@@ -272,43 +377,48 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (load_domain_map(file_path) != 0) return 1;
+  if (load_domain_map(file_path) != 0)
+    return 1;
 
-  const char* selected_if = choose_interface(iface);
-  if (!selected_if) return 1;
+  const char *selected_if = choose_interface(iface);
+  if (!selected_if)
+    return 1;
 
   printf("Using interface: %s\n", selected_if);
   printf("+----------------------------------------+\n");
 
   char errbuf[PCAP_ERRBUF_SIZE];
   // Open the selected interface for packet capture
-  pcap_t* handle = pcap_open_live(selected_if, 65535, 1, 1000, errbuf);
+  pcap_t *handle = pcap_open_live(selected_if, 65535, 1, 1000, errbuf);
   if (!handle) {
-    fprintf(stderr, "Error: Failed to open interface '%s':\n%s\n", selected_if, errbuf);
-    free((char*)selected_if);
+    fprintf(stderr, "Error: Failed to open interface '%s':\n%s\n", selected_if,
+            errbuf);
+    free((char *)selected_if);
     return 1;
   }
 
-  free((char*)selected_if);
+  free((char *)selected_if);
 
   printf("Successfully opened interface '%s' for packet capture.\n",
          iface ? iface : "(default iface)");
 
   // Set up BPF filter for DNS (UDP port 53)
   struct bpf_program dns_filter;
-  const char         filter_exp[] = "port 53";
-  bpf_u_int32        net_mask     = PCAP_NETMASK_UNKNOWN;
+  const char filter_exp[] = "port 53";
+  bpf_u_int32 net_mask = PCAP_NETMASK_UNKNOWN;
 
   // Compile the BPF filter
   if (pcap_compile(handle, &dns_filter, filter_exp, 0, net_mask) == -1) {
-    fprintf(stderr, "Error: Failed to compile filter %s:\n%s\n", filter_exp, pcap_geterr(handle));
+    fprintf(stderr, "Error: Failed to compile filter %s:\n%s\n", filter_exp,
+            pcap_geterr(handle));
     pcap_close(handle);
     return 1;
   }
 
   // Install the BPF
   if (pcap_setfilter(handle, &dns_filter) == -1) {
-    fprintf(stderr, "Error: Failed to set filter %s:\n%s\n", filter_exp, pcap_geterr(handle));
+    fprintf(stderr, "Error: Failed to set filter %s:\n%s\n", filter_exp,
+            pcap_geterr(handle));
     pcap_freecode(&dns_filter);
     pcap_close(handle);
     return 1;
