@@ -59,8 +59,7 @@ int load_domain_map(const char *filename) {
     // Split on comma
     char *comma = strchr(line, ',');
     if (!comma) {
-      fprintf(stderr, "Warning: Skipping invalid line (missing comma): %s\n",
-              line);
+      fprintf(stderr, "Warning: Skipping invalid line (missing comma): %s\n", line);
       continue;
     }
 
@@ -69,16 +68,12 @@ int load_domain_map(const char *filename) {
     char *ip = comma + 1;
 
     if (domain_count >= MAX_DOMAINS) {
-      fprintf(stderr, "Error: Too many domain mappings (limit %d)\n",
-              MAX_DOMAINS);
+      fprintf(stderr, "Error: Too many domain mappings (limit %d)\n", MAX_DOMAINS);
       break;
     }
-    strncpy(domain_map[domain_count].domain, domain,
-            sizeof(domain_map[domain_count].domain) - 1);
-    domain_map[domain_count]
-        .domain[sizeof(domain_map[domain_count].domain) - 1] = '\0';
-    strncpy(domain_map[domain_count].ip, ip,
-            sizeof(domain_map[domain_count].ip) - 1);
+    strncpy(domain_map[domain_count].domain, domain, sizeof(domain_map[domain_count].domain) - 1);
+    domain_map[domain_count].domain[sizeof(domain_map[domain_count].domain) - 1] = '\0';
+    strncpy(domain_map[domain_count].ip, ip, sizeof(domain_map[domain_count].ip) - 1);
     domain_map[domain_count].ip[sizeof(domain_map[domain_count].ip) - 1] = '\0';
     domain_count++;
   }
@@ -135,41 +130,80 @@ const char *choose_interface(const char *requested_if) {
   // After hours of debugging:
   // pcap_freealldevs frees the memory assocaited with dev->name
   char *selected_if_copy = NULL;
-  if (selected_if)
-    selected_if_copy = strdup(selected_if);
+  if (selected_if) selected_if_copy = strdup(selected_if);
 
   pcap_freealldevs(alldevs);
   return selected_if_copy;
 }
 
 // Convert DNS name format to dotted domain (e.g: 3www6google3com0 ->
-// www.google.com)
-int parse_dns_query_name(const uint8_t *payload, int payload_len, int offset,
-                         char *output, int max_len) {
-  int curr_pos = offset; // Current reading position in DNS paylaod
-  int output_idx = 0;    // Curretn wrting position in the output buffer
+// www.google.com) Returns: bytes consumed in payload if successful, or -1 or
+// error. Fills 'ouput' with the human-readable domain name
+//
+// !!! IMPORTANT: This function does NOT handle DNS compression pointers (0xC0 prefix).
+// !!! For a robust DNS parser, compression handling (often recursive) is required.
+// !!! This is a known limitation for now.
+int parse_dns_query_name(const uint8_t *payload, int payload_len, int offset, char *output,
+                         int max_len) {
+  int current_pos = offset;        // Current reading position in DNS payload
+  int output_idx = 0;              // Current writing position in the output buffer
+  int bytes_consumed_in_field = 0; // Bytes from 'offset' this function consumed for the QNAME
 
-  while (curr_pos < payload_len) {
-    uint8_t len_byte = payload[curr_pos++];
-    if (len_byte == 0)
-      break; // End of domain name
+  while (current_pos < payload_len) {
+    uint8_t len_byte = payload[current_pos];
 
-    if (len_byte + curr_pos > payload_len ||
-        output_idx + len_byte + 1 >= max_len)
+    // !!! CRITICAL LIMITATION: Does NOT handle compression pointers (0xC0
+    // prefix)
+    if ((len_byte & DNS_LABEL_COMPRESSION_MASK) == DNS_LABEL_COMPRESSION_MASK) {
+      fprintf(stderr, "Error: DNS compression pointer encountered but not "
+                      "handled by parse_dns_query_name. Skipping packet.\n");
+      output[0] = '\0';
+      return -1; // Indicate error for now.
+    }
+
+    if (len_byte == 0) {
+      bytes_consumed_in_field++; // Account for the null terminator byte
+      current_pos++;             // Advance past the null terminator
+      break;                     // End of domain name
+    }
+
+    // Check bounds for label length
+    if (current_pos + len_byte + 1 > payload_len) { // +1 for the length byte itself
+      fprintf(stderr, "Error: Malformed DNS name (label length out of bounds).\n");
+      output[0] = '\0'; // Ensure output is empty
       return -1;
+    }
 
-    if (output_idx > 0)
-      output[output_idx++] = '.';
-    memcpy(output + output_idx, payload + curr_pos, len_byte);
-    output_idx += len_byte;
-    curr_pos += len_byte;
+    // Append label to output with a dot if not the first label
+    if (output_idx > 0) {
+      if (output_idx + 1 >= max_len) { // Check for space for '.'
+        fprintf(stderr, "Error: Output buffer too small for domain name.\n");
+        output[0] = '\0';
+        return -1;
+      }
+      output[output_idx++] = '.'; // Add dot separator
+    }
+
+    // Copy label bytes
+    for (int i = 0; i < len_byte; i++) {
+      if (output_idx >= max_len - 1) { // -1 for null terminator
+        fprintf(stderr, "Error: Output buffer too small for domain name.\n");
+        output[0] = '\0';
+        return -1;
+      }
+      output[output_idx++] = payload[current_pos + 1 + i]; // +1 to skip length byte itself
+    }
+    bytes_consumed_in_field += (1 + len_byte); // Account for the label's length byte + label data
+    current_pos += (1 + len_byte);             // Advance pointer past length byte and label data
   }
-  output[output_idx] = '\0';
-  return curr_pos;
+
+  output[output_idx] = '\0'; // Null-terminate the string
+
+  return bytes_consumed_in_field; // Return total bytes consumed from the
+                                  // starting offset for this QNAME field
 }
 
-void print_dns_packet_info(const struct ip *ip_hdr,
-                           const struct udphdr *udp_hdr,
+void print_dns_packet_info(const struct ip *ip_hdr, const struct udphdr *udp_hdr,
                            const uint8_t *dns_payload, int dns_length,
                            const struct pcap_pkthdr *p_pkt_hdr) {
   char time_str[64];
@@ -219,8 +253,7 @@ void print_dns_packet_info(const struct ip *ip_hdr,
 
     printf("\n");
   }
-  printf(COLOR_HEADER
-         "=============================================\n" COLOR_RESET);
+  printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
 }
 
 void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
@@ -234,48 +267,40 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
 
   // Parse Ethernet header
   eth_hdr = (const struct ether_header *)raw_packet;
-  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP)
-    return;
+  if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) return;
 
   // Parse IP header
   ip_hdr = (const struct ip *)(raw_packet + sizeof(struct ether_header));
   uint32_t ip_header_len = ip_hdr->ip_hl * 4;
   // Basic IP length validation
-  if (ip_header_len < 20 || ip_header_len > ip_hdr->ip_len * 4)
-    return;
+  if (ip_header_len < 20 || ip_header_len > ip_hdr->ip_len * 4) return;
 
   // Only process UDP packets
-  if (ip_hdr->ip_p != IPPROTO_UDP)
-    return;
+  if (ip_hdr->ip_p != IPPROTO_UDP) return;
 
   // Parse UDP header
   udp_hdr = (const struct udphdr *)((const uint8_t *)ip_hdr + ip_header_len);
 
   // Filter for DNS packets (UDP src or dst port = 53)
-  if (ntohs(udp_hdr->uh_dport) != DNS_PORT &&
-      ntohs(udp_hdr->uh_sport) != DNS_PORT)
-    return;
+  if (ntohs(udp_hdr->uh_dport) != DNS_PORT && ntohs(udp_hdr->uh_sport) != DNS_PORT) return;
 
   // Get DNS payload pointer and length
   dns_payload = (const uint8_t *)udp_hdr + sizeof(struct udphdr);
   uint32_t dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
 
   // Only process DNS packet
-  if (dns_length < sizeof(dns_header_t))
-    return;
+  if (dns_length < sizeof(dns_header_t)) return;
   const dns_header_t *dns_header = (const dns_header_t *)dns_payload;
 
   // Get the flags
   uint16_t flags_host = ntohs(dns_header->flags);
 
   // Fliter for DNS Queries (QR bit = 0)
-  if (flags_host & 0x8000)
-    return;
+  if (flags_host & 0x8000) return;
 
   // Get number of questions
   uint16_t qdcount = ntohs(dns_header->qdcount);
-  if (qdcount == 0)
-    return;
+  if (qdcount == 0) return;
   if (qdcount > 1) {
     fprintf(stderr,
             "Warning: DNS query with multiple questions (%hu) "
@@ -289,9 +314,8 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
       sizeof(dns_header_t); // Start of Question section is after the DNS header
 
   // Parse the doamin name
-  int name_len_in_packet =
-      parse_dns_query_name(dns_payload, dns_length, current_dns_offset,
-                           queried_domain, sizeof(queried_domain));
+  int name_len_in_packet = parse_dns_query_name(dns_payload, dns_length, current_dns_offset,
+                                                queried_domain, sizeof(queried_domain));
   if (name_len_in_packet < 0) {
     fprintf(stderr, "Error: Failed to parse domain name. Skipping packet.\n");
     return;
@@ -302,19 +326,16 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
 
   // Check bounds for QTYPE and QCLASS (2 bytes each)
   if (current_dns_offset + sizeof(u_int16_t) * 2 > dns_length) {
-    fprintf(stderr,
-            "Error: DNS packet too short for QTYPTE/QCLASS. Skipping packet\n");
+    fprintf(stderr, "Error: DNS packet too short for QTYPTE/QCLASS. Skipping packet\n");
     return;
   }
 
   // Extract QTYPE and QCLASS
   const uint8_t *qtype_ptr = dns_payload + current_dns_offset;
   uint16_t qtype = ntohs(*(const uint16_t *)qtype_ptr);
-  uint16_t qclass =
-      ntohs(*(uint16_t *)(dns_payload + current_dns_offset + sizeof(uint16_t)));
+  uint16_t qclass = ntohs(*(uint16_t *)(dns_payload + current_dns_offset + sizeof(uint16_t)));
 
-  printf(COLOR_LABEL "Queried domain:         " COLOR_RESET "%s\n",
-         queried_domain);
+  printf(COLOR_LABEL "Queried domain:         " COLOR_RESET "%s\n", queried_domain);
 
   printf("QTYPE: %hu, QCLASS: %hu\n", qtype, qclass);
 
@@ -322,10 +343,8 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
   if (qtype == DNS_TYPE_A && qclass == DNS_CLASS_IN) {
     for (int i = 0; i < domain_count; i++) {
       if (strcasecmp(queried_domain, domain_map[i].domain) == 0) {
-        printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain,
-               domain_map[i].ip);
-        print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length,
-                              pkt_header);
+        printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain, domain_map[i].ip);
+        print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header);
         break;
       }
     }
@@ -377,12 +396,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (load_domain_map(file_path) != 0)
-    return 1;
+  if (load_domain_map(file_path) != 0) return 1;
 
   const char *selected_if = choose_interface(iface);
-  if (!selected_if)
-    return 1;
+  if (!selected_if) return 1;
 
   printf("Using interface: %s\n", selected_if);
   printf("+----------------------------------------+\n");
@@ -391,8 +408,7 @@ int main(int argc, char **argv) {
   // Open the selected interface for packet capture
   pcap_t *handle = pcap_open_live(selected_if, 65535, 1, 1000, errbuf);
   if (!handle) {
-    fprintf(stderr, "Error: Failed to open interface '%s':\n%s\n", selected_if,
-            errbuf);
+    fprintf(stderr, "Error: Failed to open interface '%s':\n%s\n", selected_if, errbuf);
     free((char *)selected_if);
     return 1;
   }
@@ -409,16 +425,14 @@ int main(int argc, char **argv) {
 
   // Compile the BPF filter
   if (pcap_compile(handle, &dns_filter, filter_exp, 0, net_mask) == -1) {
-    fprintf(stderr, "Error: Failed to compile filter %s:\n%s\n", filter_exp,
-            pcap_geterr(handle));
+    fprintf(stderr, "Error: Failed to compile filter %s:\n%s\n", filter_exp, pcap_geterr(handle));
     pcap_close(handle);
     return 1;
   }
 
   // Install the BPF
   if (pcap_setfilter(handle, &dns_filter) == -1) {
-    fprintf(stderr, "Error: Failed to set filter %s:\n%s\n", filter_exp,
-            pcap_geterr(handle));
+    fprintf(stderr, "Error: Failed to set filter %s:\n%s\n", filter_exp, pcap_geterr(handle));
     pcap_freecode(&dns_filter);
     pcap_close(handle);
     return 1;

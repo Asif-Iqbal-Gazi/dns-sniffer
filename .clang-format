@@ -4,8 +4,8 @@ BasedOnStyle: LLVM
 IndentWidth: 2  # 2 is default for LLVM.
 TabWidth: 2     # Should match IndentWidth if UseTab is Never.
 UseTab: Never
-AlignConsecutiveAssignments: true # Align '=' signs
-AlignConsecutiveDeclarations: true # Align variable names in declarations
+#AlignConsecutiveAssignments: true # Align '=' signs
+# AlignConsecutiveDeclarations: true # Align variable names in declarations
 
 # --- Brace Wrapping (K&R/Egyptian Brace Style) ---
 BreakBeforeBraces: Custom
@@ -44,7 +44,7 @@ SpacesInSquareBrackets: false # array[ index ]
 SpacesBeforeTrailingComments: 1 # Number of spaces before a line comment // like this
 
 # --- Pointer & Reference Alignment ---
-PointerAlignment: Left # int *ptr; (LLVM default)
+PointerAlignment: Right # int *ptr; (LLVM default)
 ReferenceAlignment: Left # int &ref (C++ specific)
 
 # --- Blank Lines ---
