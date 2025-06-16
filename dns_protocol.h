@@ -188,7 +188,7 @@ typedef enum {
 // Therefore, this struct represents the *parsed* components, not a direct
 // memory map. NAME needs to be parsed separately, and RDATA's format depends on
 // TYPE.
-typedef struct {
+typedef struct __attribute__((__packed__)) {
   // char name[DNS_MAX_NAME_LENGTH + 1]; // Store parsed domain name here
   // dns_rr_type_t type;   // Type of record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
   uint16_t rtype; // Type of record (e.g., DNS_TYPE_A, DNS_TYPE_MX)

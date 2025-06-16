@@ -279,10 +279,8 @@ void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_
     return;
   }
 
-  // memcpy(current_offset_in_dns_payload, &spoofed_ip_addr.s_addr, sizeof(spoofed_ip_addr.s_addr));
-  memcpy(current_offset_in_dns_payload - 2, &spoofed_ip_addr.s_addr, sizeof(uint32_t));
-  // current_offset_in_dns_payload += sizeof(spoofed_ip_addr.s_addr);
-  current_offset_in_dns_payload += sizeof(uint32_t);
+  memcpy(current_offset_in_dns_payload, &spoofed_ip_addr.s_addr, sizeof(spoofed_ip_addr.s_addr));
+  current_offset_in_dns_payload += sizeof(spoofed_ip_addr.s_addr);
 
   // --- 7. Finalize Lenghts and Checksum ---
   int dns_resp_length   = (int)(current_offset_in_dns_payload - dns_resp_paylaod);
