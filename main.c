@@ -205,7 +205,8 @@ int parse_dns_query_name(const uint8_t *payload, int payload_len, int offset, ch
 
 void print_dns_packet_info(const struct ip *ip_hdr, const struct udphdr *udp_hdr,
                            const uint8_t *dns_payload, int dns_length,
-                           const struct pcap_pkthdr *p_pkt_hdr) {
+                           const struct pcap_pkthdr *p_pkt_hdr, const char *queried_domain,
+                           uint16_t qtype, uint16_t qclass, const char *spoofed_ip) {
   char time_str[64];
   time_t pkt_time = p_pkt_hdr->ts.tv_sec;
   struct tm *ltime = localtime(&pkt_time);
@@ -221,39 +222,61 @@ void print_dns_packet_info(const struct ip *ip_hdr, const struct udphdr *udp_hdr
 
   // Start output
   // clang-format off
-  printf(COLOR_HEADER "\n=============================================\n" COLOR_RESET);
-  printf(COLOR_LABEL "📦 DNS Packet Captured  " COLOR_RESET "(%d bytes)\n", dns_length);
-  printf(COLOR_LABEL "⏰ Timestamp:           " COLOR_RESET "%s.%06ld\n", time_str, p_pkt_hdr->ts.tv_usec);
-  printf(COLOR_LABEL "🔹 From:                " COLOR_RESET "%s:%d\n", src_ip, src_port);
-  printf(COLOR_LABEL "🔸 To:                  " COLOR_RESET "%s:%d\n", dst_ip, dst_port);
-  printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
+    printf(COLOR_HEADER "\n=============================================\n" COLOR_RESET);
+    if (spoofed_ip) {
+        printf(COLOR_LABEL "🚨 DNS SPOOF EVENT!         " COLOR_RESET "(%d bytes)\n", dns_length);
+    } else {
+        printf(COLOR_LABEL "📦 DNS Query Detected        " COLOR_RESET "(%d bytes)\n", dns_length);
+    }
+    printf(COLOR_LABEL "⏰ Timestamp:                " COLOR_RESET "%s.%06ld\n", time_str, p_pkt_hdr->ts.tv_usec);
+    printf(COLOR_LABEL "🔹 From:                     " COLOR_RESET "%s:%d\n", src_ip, src_port);
+    printf(COLOR_LABEL "🔸 To:                       " COLOR_RESET "%s:%d\n", dst_ip, dst_port);
+    printf(COLOR_LABEL "🔍 Query:                    " COLOR_RESET "%s\n", queried_domain);
+    printf(COLOR_LABEL "   Type:                     " COLOR_RESET "%hu ", qtype);
+    switch (qtype) {
+        case DNS_TYPE_A: printf("(A)\n"); break;
+        case DNS_TYPE_AAAA: printf("(AAAA)\n"); break;
+        case DNS_TYPE_MX: printf("(MX)\n"); break;
+        case DNS_TYPE_NS: printf("(NS)\n"); break;
+        case DNS_TYPE_CNAME: printf("(CNAME)\n"); break;
+        case DNS_TYPE_PTR: printf("(PTR)\n"); break;
+        case DNS_TYPE_TXT: printf("(TXT)\n"); break;
+        case DNS_TYPE_SRV: printf("(SRV)\n"); break;
+        default: printf("(UNKNOWN)\n"); break;
+    }
+    printf(COLOR_LABEL "   Class:                    " COLOR_RESET "%hu ", qclass);
+    switch (qclass) {
+        case DNS_CLASS_IN: printf("(IN)\n"); break;
+        case DNS_CLASS_CH: printf("(CH)\n"); break;
+        case DNS_CLASS_HS: printf("(HS)\n"); break;
+        default: printf("(UNKNOWN)\n"); break;
+    }
 
-  printf(COLOR_LABEL "Offset   Hex Bytes                                      | ASCII\n" COLOR_RESET);
-  printf(COLOR_HEADER "--------------------------------------------------------|----------------\n" COLOR_RESET);
+    if (spoofed_ip) {
+        printf(COLOR_LABEL "➡️ Spoofed to IP:          " COLOR_RESET "%s\n", spoofed_ip);
+    }
+    printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
+
+    // Optional: Hex dump of the DNS payload for deeper debugging
+    printf(COLOR_LABEL "Offset   Hex Bytes                                 | ASCII\n" COLOR_RESET);
+    printf(COLOR_HEADER "--------------------------------------------------------|----------------\n" COLOR_RESET);
+    for (int i = 0; i < dns_length; i += BYTES_PER_LINE) {
+        printf("%04x:   ", i);
+        for (int j = 0; j < BYTES_PER_LINE; j++) {
+            if (i + j < dns_length)
+                printf("%02x ", dns_payload[i + j]);
+            else
+                printf("   ");
+        }
+        printf(" | ");
+        for (int j = 0; j < BYTES_PER_LINE && i + j < dns_length; j++) {
+            unsigned char c = dns_payload[i + j];
+            printf("%c", (c >= 32 && c <= 126) ? c : '.');
+        }
+        printf("\n");
+    }
+    printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
   // clang-format on
-
-  for (int i = 0; i < dns_length; i += BYTES_PER_LINE) {
-    printf("%04x:  ", i);
-
-    // Print hex bytes
-    for (int j = 0; j < BYTES_PER_LINE; j++) {
-      if (i + j < dns_length)
-        printf("%02x ", dns_payload[i + j]);
-      else
-        printf("   ");
-    }
-
-    printf(" | ");
-
-    // Print ASCII
-    for (int j = 0; j < BYTES_PER_LINE && i + j < dns_length; j++) {
-      unsigned char c = dns_payload[i + j];
-      printf("%c", (c >= 32 && c <= 126) ? c : '.');
-    }
-
-    printf("\n");
-  }
-  printf(COLOR_HEADER "=============================================\n" COLOR_RESET);
 }
 
 void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
@@ -344,7 +367,8 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
     for (int i = 0; i < domain_count; i++) {
       if (strcasecmp(queried_domain, domain_map[i].domain) == 0) {
         printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain, domain_map[i].ip);
-        print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header);
+        print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header, queried_domain,
+                              qtype, qclass, domain_map[i].ip);
         break;
       }
     }
