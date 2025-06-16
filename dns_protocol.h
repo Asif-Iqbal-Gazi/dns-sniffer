@@ -8,7 +8,7 @@
 #define DNS_PORT 53
 #define DNS_MAX_LABEL_LENGTH 63 // Max length of a single DNS label (www, example, com are labels)
 #define DNS_MAX_NAME_LENGTH 255 // Max length of a full DNS domain name (including null terminator)
-#define DNS_LABEL_COMPRESSION_MASK 0xC0
+#define DNS_LABEL_COMPRESSION_MASK 0xC000
 
 // --- Main DNS Packet Structure ---
 
@@ -190,19 +190,21 @@ typedef enum {
 // TYPE.
 typedef struct {
   // char name[DNS_MAX_NAME_LENGTH + 1]; // Store parsed domain name here
-  dns_rr_type_t  rtype;    // Type of resource record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
-  dns_rr_class_t rclass;   // Class of resource record (e.g., DNS_CLASS_IN)
-  uint32_t       ttl;      // Time To Live in seconds. How long the record can be cached.
-  uint16_t       rdlength; // Length of the RDATA field in bytes.
-                           // union {                   // RDATA can be union if
-                           // parsing specific types
-                           //   uint32_t a_record;      // For A records (IPv4)
-                           //   uint8_t aaaa_record[16]; // For AAAA records (IPv6)
-                           //   // ... other RDATA types
-                           // } rdata;
+  // dns_rr_type_t type;   // Type of record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
+  uint16_t rtype; // Type of record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
+  // dns_rr_class_t class; // Class of record (e.g., DNS_CLASS_IN)
+  uint16_t rclass;   // Class of record (e.g., DNS_CLASS_IN)
+  uint32_t ttl;      // Time To Live in seconds.
+  uint16_t rdlength; // Length of the RDATA field in bytes.
+                     // union {                   // RDATA can be union if
+                     // parsing specific types
+                     //   uint32_t a_record;      // For A records (IPv4)
+                     //   uint8_t aaaa_record[16]; // For AAAA records (IPv6)
+                     //   // ... other RDATA types
+                     // } rdata;
   // const uint8_t *rdata_ptr; // Pointer to raw RDATA bytes for generic
   // handling
-} dns_resource_record_t;
+} dns_rr_fixed_part_t; // Fixed part of Resource Record
 
 // --- Specific RDATA Structures for Common Record Types (for parsing into) ---
 // These are not directly in the packet but are targets for parsed RDATA.
