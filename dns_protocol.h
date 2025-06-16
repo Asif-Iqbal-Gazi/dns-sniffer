@@ -1,76 +1,14 @@
 #ifndef DNS_PROTOCOL_H
 #define DNS_PROTOCOL_H
 
-#include <stdint.h> // For uint8_t, uint16_t, unint32_t
+#include <netinet/in.h>
+#include <stdint.h> // For uint8_t, uint16_t, uint32_t
 
 // --- Constants ---
 #define DNS_PORT 53
 #define DNS_MAX_LABEL_LENGTH 63 // Max length of a single DNS label (www, example, com are labels)
 #define DNS_MAX_NAME_LENGTH 255 // Max length of a full DNS domain name (including null terminator)
 #define DNS_LABEL_COMPRESSION_MASK 0xC0
-
-// --- Enums for DNS Header Fields ---
-
-// DNS Opcode (4 bits in flags)
-typedef enum {
-  DNS_OPCODE_QUERY = 0,  // Standard query
-  DNS_OPCODE_IQUERY = 1, // Inverse query (obsolete)
-  DNS_OPCODE_STATUS = 2, // Server status request (obsolete)
-  DNS_OPCODE_NOTIFY = 4, // Notify (RFC 1996)
-  DNS_OPCODE_UPDATE = 5  // Update (RFC 2136)
-} dns_opcode_t;
-
-// DNS Response Code (RCODE - 4 bits in flags)
-typedef enum {
-  DNS_RCODE_NOERROR = 0,    // No error
-  DNS_RCODE_FORMAT_ERR = 1, // Format error - The name server was unable to interpret the query.
-  DNS_RCODE_SERV_FAIL = 2,  // Server failure - The name server was unable to process this query
-                            // due to a problem with the name server.
-  DNS_RCODE_NXDOMAIN = 3,   // Name Error - Meaningful only for responses from an
-                            // authoritative name server, and means that the
-                            // domain name referenced in the query does not exist.
-  DNS_RCODE_NOT_IMPL = 4,   // Not Implemented - The name server does not support
-                            // the requested kind of query.
-  DNS_RCODE_REFUSED = 5,    // Refused - The name server refuses to perform the
-                            // specified operation for policy reasons.
-                            // ... (other extended RCODEs beyond RFC 1035)
-} dns_rcode_t;
-
-// --- Enums for Resource Record Types (QTYPE/TYPE) ---
-// These are used in the Question section (QTYPE) and Resource Record sections
-// (TYPE). Only common types are listed.
-typedef enum {
-  DNS_TYPE_A = 1,      // a host address (IPv4)
-  DNS_TYPE_NS = 2,     // an authoritative name server
-  DNS_TYPE_MD = 3,     // a mail destination (obsolete)
-  DNS_TYPE_MF = 4,     // a mail forwarder (obsolete)
-  DNS_TYPE_CNAME = 5,  // the canonical name for an alias
-  DNS_TYPE_SOA = 6,    // marks the start of a zone of authority
-  DNS_TYPE_MB = 7,     // a mailbox domain name (experimental)
-  DNS_TYPE_MG = 8,     // a mail group member (experimental)
-  DNS_TYPE_MR = 9,     // a mail rename domain name (experimental)
-  DNS_TYPE_NULL = 10,  // a null RR (experimental)
-  DNS_TYPE_WKS = 11,   // a well known service description
-  DNS_TYPE_PTR = 12,   // a domain name pointer
-  DNS_TYPE_HINFO = 13, // host information
-  DNS_TYPE_MINFO = 14, // mailbox or mail list information
-  DNS_TYPE_MX = 15,    // mail exchange
-  DNS_TYPE_TXT = 16,   // text strings
-  DNS_TYPE_AAAA = 28,  // IPv6 host address (RFC 3596)
-  DNS_TYPE_SRV = 33,   // Service record (RFC 2782)
-  DNS_TYPE_ALL = 255   // A request for all records (ANY)
-} dns_rr_type_t;
-
-// --- Enums for Resource Record Classes (QCLASS/CLASS) ---
-// These are used in the Question section (QCLASS) and Resource Record sections
-// (CLASS).
-typedef enum {
-  DNS_CLASS_IN = 1,   // Internet (most common)
-  DNS_CLASS_CS = 2,   // CSNET class (obsolete)
-  DNS_CLASS_CH = 3,   // CHAOS class
-  DNS_CLASS_HS = 4,   // Hesiod class
-  DNS_CLASS_ANY = 255 // A request for any class
-} dns_rr_class_t;
 
 // --- Main DNS Packet Structure ---
 
@@ -168,6 +106,82 @@ typedef struct {
   uint16_t arcount; // Number of resource records in the Additional section.
 } dns_header_t;
 
+// Flags masks and shifts
+#define DNS_FLAG_QR_MASK 0x8000     // Query (0) / Response (1)
+#define DNS_FLAG_OPCODE_MASK 0x7800 // Opcode (4 bits)
+#define DNS_FLAG_OPCODE_SHIFT 11
+#define DNS_FLAG_AA_MASK 0x0400    // Authoritative Answer
+#define DNS_FLAG_TC_MASK 0x0200    // Truncated Message
+#define DNS_FLAG_RD_MASK 0x0100    // Recursion Desired
+#define DNS_FLAG_RA_MASK 0x0080    // Recursion Available
+#define DNS_FLAG_Z_MASK 0x0070     // Reserved (must be zero)
+#define DNS_FLAG_AD_MASK 0x0020    // Authenticated Data (RFC 4035)
+#define DNS_FLAG_CD_MASK 0x0010    // Checking Disabled (RFC 4035)
+#define DNS_FLAG_RCODE_MASK 0x000F // Response Code (4 bits)
+
+// --- Enums for DNS Header Fields ---
+
+// DNS Opcode (4 bits in flags)
+typedef enum {
+  DNS_OPCODE_QUERY  = 0, // Standard query
+  DNS_OPCODE_IQUERY = 1, // Inverse query (obsolete)
+  DNS_OPCODE_STATUS = 2, // Server status request (obsolete)
+  // Opcodes 3-15 are reserved
+  DNS_OPCODE_NOTIFY = 4, // Notify (RFC 1996)
+  DNS_OPCODE_UPDATE = 5  // Update (RFC 2136)
+} dns_opcode_t;
+
+// DNS Response Code (RCODE - 4 bits in flags)
+typedef enum {
+  DNS_RCODE_NOERROR    = 0, // No error
+  DNS_RCODE_FORMAT_ERR = 1, // Format error - The name server was unable to interpret the query.
+  DNS_RCODE_SERV_FAIL  = 2, // Server failure - The name server was unable to process this query
+                            // due to a problem with the name server.
+  DNS_RCODE_NXDOMAIN = 3,   // Non-Existent Domain
+  DNS_RCODE_NOT_IMPL = 4,   // Not Implemented - The name server does not support
+                            // the requested kind of query.
+  DNS_RCODE_REFUSED = 5,    // Refused - The name server refuses to perform the
+                            // specified operation for policy reasons.
+                            // ... (other extended RCODEs beyond RFC 1035)
+} dns_rcode_t;
+
+// --- Enums for Resource Record Types (QTYPE/TYPE) ---
+// These are used in the Question section (QTYPE) and Resource Record sections
+// (TYPE). Only common types are listed.
+typedef enum {
+  DNS_TYPE_A     = 1,  // a host address (IPv4)
+  DNS_TYPE_NS    = 2,  // an authoritative name server
+  DNS_TYPE_MD    = 3,  // a mail destination (obsolete)
+  DNS_TYPE_MF    = 4,  // a mail forwarder (obsolete)
+  DNS_TYPE_CNAME = 5,  // the canonical name for an alias
+  DNS_TYPE_SOA   = 6,  // marks the start of a zone of authority
+  DNS_TYPE_MB    = 7,  // a mailbox domain name (experimental)
+  DNS_TYPE_MG    = 8,  // a mail group member (experimental)
+  DNS_TYPE_MR    = 9,  // a mail rename domain name (experimental)
+  DNS_TYPE_NULL  = 10, // a null RR (experimental)
+  DNS_TYPE_WKS   = 11, // a well known service description
+  DNS_TYPE_PTR   = 12, // a domain name pointer
+  DNS_TYPE_HINFO = 13, // host information
+  DNS_TYPE_MINFO = 14, // mailbox or mail list information
+  DNS_TYPE_MX    = 15, // mail exchange
+  DNS_TYPE_TXT   = 16, // text strings
+  DNS_TYPE_AAAA  = 28, // IPv6 host address (RFC 3596)
+  DNS_TYPE_SRV   = 33, // Service record (RFC 2782)
+  DNS_TYPE_ALL   = 255 // A request for all records (ANY)
+} dns_rr_type_t;
+
+// --- Enums for Resource Record Classes (QCLASS/CLASS) ---
+// These are used in the Question section (QCLASS) and Resource Record sections
+// (CLASS).
+typedef enum {
+  DNS_CLASS_IN = 1, // Internet (most common)
+  DNS_CLASS_CS = 2, // CSNET class (obsolete)
+  DNS_CLASS_CH = 3, // CHAOS class
+  DNS_CLASS_HS = 4, // Hesiod class
+  // Classes 5-254 are reserved
+  DNS_CLASS_ANY = 255 // A request for any class
+} dns_rr_class_t;
+
 // --- Conceptual DNS Resource Record (RR) Structure ---
 // This structure is common to Answer, Authority, and Additional sections.
 // NOTE: NAME and RDATA are variable-length fields (and can be compressed).
@@ -176,16 +190,16 @@ typedef struct {
 // TYPE.
 typedef struct {
   // char name[DNS_MAX_NAME_LENGTH + 1]; // Store parsed domain name here
-  dns_rr_type_t rtype;   // Type of resource record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
-  dns_rr_class_t rclass; // Class of resource record (e.g., DNS_CLASS_IN)
-  uint32_t ttl;          // Time To Live in seconds. How long the record can be cached.
-  uint16_t rdlength;     // Length of the RDATA field in bytes.
-                         // union {                   // RDATA can be union if
-                         // parsing specific types
-                         //   uint32_t a_record;      // For A records (IPv4)
-                         //   uint8_t aaaa_record[16]; // For AAAA records (IPv6)
-                         //   // ... other RDATA types
-                         // } rdata;
+  dns_rr_type_t  rtype;    // Type of resource record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
+  dns_rr_class_t rclass;   // Class of resource record (e.g., DNS_CLASS_IN)
+  uint32_t       ttl;      // Time To Live in seconds. How long the record can be cached.
+  uint16_t       rdlength; // Length of the RDATA field in bytes.
+                           // union {                   // RDATA can be union if
+                           // parsing specific types
+                           //   uint32_t a_record;      // For A records (IPv4)
+                           //   uint8_t aaaa_record[16]; // For AAAA records (IPv6)
+                           //   // ... other RDATA types
+                           // } rdata;
   // const uint8_t *rdata_ptr; // Pointer to raw RDATA bytes for generic
   // handling
 } dns_resource_record_t;
