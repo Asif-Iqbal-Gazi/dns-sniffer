@@ -1,5 +1,5 @@
 # Ignore built binaries
-bin/dns_sniffer
+/bin/
 
 # Object files
 *.o

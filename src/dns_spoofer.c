@@ -1,4 +1,4 @@
-#include "dns_protocol.h"
+#include "../include/dns_protocol.h"
 
 #include <arpa/inet.h>
 #include <net/ethernet.h>

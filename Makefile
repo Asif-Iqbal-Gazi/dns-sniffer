@@ -1,23 +1,47 @@
+# Compiler and Package Config
 cc = gcc
 PKG = libpcap
 
-CFLAGS = -Wall -Wextra -Werror -Wold-style-definition -pedantic -std=gnu11 -ggdb `pkg-config --cflags $(PKG)` -Iinclude
-LDFLAGS = `pkg-config --libs $(PKG)`
-
+# Directories
 SRC_DIR = src
 BIN_DIR = bin
-TARGET = $(BIN_DIR)/dns_sniffer
+INCLUDE_DIR = include
 
-SRC = $(wildcard $(SRC_DIR)/*.c)
-OBJ = $(SRC:.c=.o)
+# Source Files
+SRC_CURRENT = $(SRC_DIR)/dns_spoofer.c
+SRC_STATIC = $(SRC_DIR)/dns_spoofer_static.c
 
-all: $(TARGET)
+# Output Binaries
+BIN_CURRENT = $(BIN_DIR)/dns_spoofer
+BIN_STATIC = $(BIN_DIR)/dns_spoofer_static
 
-$(TARGET): $(SRC)
+# Compilation Flags
+CFLAGS = -Wall -Wextra -Werror -Wold-style-definition -pedantic -std=gnu11 -ggdb $(shell pkg-config --cflags $(PKG)) -I$(INCLUDE_DIR)
+LDFLAGS = $(shell pkg-config --libs $(PKG))
+
+# Common header file
+COMMON_HEADERS = $(INCLUDE_DIR)/dns_protocol.h
+
+# Default Traget - Builds both executables
+all: $(BIN_STATIC) $(BIN_CURRENT)
+
+# Rule for creating the bin directory
+$(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
+# Build Rules:
+$(BIN_STATIC) : $(SRC_STATIC) $(COMMON_HEADERS) | $(BIN_DIR)
+	@echo "Compiling $(SRC_STATIC) to $(BIN_STATIC)"
+	$(cc) $(CFLAGS) $(SRC_STATIC) -o $(BIN_STATIC) $(LDFLAGS)
+
+$(BIN_CURRENT) : $(SRC_CURRENT)
+	@echo "Compiling $(SRC_CURRENT) to $(BIN_CURRENT)"
+	$(cc) $(CFLAGS) $(SRC_CURRENT) -o $(BIN_CURRENT) $(LDFLAGS)
+
+# Clean Target
 clean:
-	rm -f $(TARGET)
+	@echo "Cleaning compiled bianries..."
+	rm -f $(BIN_STATIC) $(BIN_CURRENT)
+	-rmdir $(BIN_DIR) 2>/dev/null || true
 
 .PHONY: all clean
