@@ -1,1 +1,8 @@
-dns_sniffer
+# Ignore built binaries
+bin/dns_sniffer
+
+# Object files
+*.o
+
+# OS-specific files
+

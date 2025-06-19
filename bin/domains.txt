@@ -1,0 +1,3 @@
+example.com,1.2.3.4
+example55.com,5.6.7.8
+www.google.com,192.0.2.2
