@@ -1,0 +1,48 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-Wold-style-definition",
+      "-pedantic",
+      "-std=gnu11",
+      "-ggdb",
+      "-I/usr/include/dbus-1.0",
+      "-I/usr/lib/x86_64-linux-gnu/dbus-1.0/include",
+      "-I/usr/include/libnl3",
+      "-Iinclude",
+      "-o",
+      "bin/dns_spoofer_static",
+      "src/dns_spoofer_static.c"
+    ],
+    "directory": "/home/asif/coding/c/packet-capture/dns_sniffer",
+    "file": "/home/asif/coding/c/packet-capture/dns_sniffer/src/dns_spoofer_static.c",
+    "output": "/home/asif/coding/c/packet-capture/dns_sniffer/bin/dns_spoofer_static"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-Wold-style-definition",
+      "-pedantic",
+      "-std=gnu11",
+      "-ggdb",
+      "-I/usr/include/dbus-1.0",
+      "-I/usr/lib/x86_64-linux-gnu/dbus-1.0/include",
+      "-I/usr/include/libnl3",
+      "-Iinclude",
+      "-o",
+      "bin/dns_spoofer",
+      "src/dns_spoofer.c"
+    ],
+    "directory": "/home/asif/coding/c/packet-capture/dns_sniffer",
+    "file": "/home/asif/coding/c/packet-capture/dns_sniffer/src/dns_spoofer.c",
+    "output": "/home/asif/coding/c/packet-capture/dns_sniffer/bin/dns_spoofer"
+  }
+]

