@@ -28,7 +28,7 @@
 #define COLOR_DATA "\033[0;37m"  // Light gray
 
 typedef struct {
-  char domain[128];
+  char domain[DNS_MAX_NAME_LENGTH];
   char ip[INET_ADDRSTRLEN];
 } DomainMapEntry;
 
@@ -163,11 +163,11 @@ void send_dns_spoof_response(pcap_t *handle, const struct ether_header *ori_eth_
                              const struct ip *ori_ip_hdr, const struct udphdr *ori_udp_hdr,
                              const uint8_t *ori_dns_payload, int ori_qname_offset_in_dns_payload,
                              int ori_qname_data_len_in_packet, const char *spoofed_ip_str) {
-  // Calculate fixed header sizes
-  const int ETH_HDR_SIZE = sizeof(struct ether_header);
-  const int IP_HDR_SIZE  = sizeof(struct ip);
-  const int UDP_HDR_SIZE = sizeof(struct udphdr);
-  const int DNS_HDR_SIZE = sizeof(dns_header_t);
+  // calculate fixed header sizes -- REMOVED as added in dns_protocol.h
+  // const int ETH_HDR_SIZE = sizeof(struct ether_header);
+  // const int IP_HDR_SIZE  = sizeof(struct ip);
+  // const int UDP_HDR_SIZE = sizeof(struct udphdr);
+  // const int DNS_HDR_SIZE = sizeof(dns_header_t);
 
   // Calculate the total size of the original DNS question section
   // QNAME bytes consumed + QTYPE + QCLASS

@@ -6,8 +6,15 @@
 
 // --- Constants ---
 #define DNS_PORT 53
+#define MAX_DOMAINS 256
+#define MAX_LINE_LEN 256
 #define DNS_MAX_LABEL_LENGTH 63 // Max length of a single DNS label (www, example, com are labels)
-#define DNS_MAX_NAME_LENGTH 255 // Max length of a full DNS domain name (including null terminator)
+#define DNS_MAX_NAME_LENGTH 256 // Max length of a full DNS domain name (including null terminator)
+#define DNS_MAX_PAYLOAD_SIZE 512
+#define ETH_HDR_SIZE sizeof(struct ether_header)
+#define IP_HDR_SIZE sizeof(struct ip)
+#define UDP_HDR_SIZE sizeof(struct udphdr)
+#define DNS_HDR_SIZE 12
 #define DNS_LABEL_COMPRESSION_MASK 0xC000
 
 // --- Main DNS Packet Structure ---
@@ -82,7 +89,7 @@
 // DNS Header: (12 bytes)
 // All fields are in Network Byte Order.
 // Use nthos() for 16-bit fields adn ntohl() for 32-bit fields.
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint16_t id; // Identification number. Assigned by the querier to match replies.
 
   // Flags field breakdown (16 bits):
@@ -188,7 +195,7 @@ typedef enum {
 // Therefore, this struct represents the *parsed* components, not a direct
 // memory map. NAME needs to be parsed separately, and RDATA's format depends on
 // TYPE.
-typedef struct __attribute__((__packed__)) {
+typedef struct __attribute__((packed)) {
   // char name[DNS_MAX_NAME_LENGTH + 1]; // Store parsed domain name here
   // dns_rr_type_t type;   // Type of record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
   uint16_t rtype; // Type of record (e.g., DNS_TYPE_A, DNS_TYPE_MX)
@@ -260,5 +267,17 @@ typedef struct {
                   // char text[256]; // Text data (up to 255 bytes, plus null
                   // terminator)
 } dns_rdata_txt_t;
+
+// // domainmapentry with precomputed data
+// typedef struct {
+//   char    domain[128];
+//   char    ip[inet_addrstrlen];
+//   int     precomputed_dns_payload_len;
+//   uint8_t precomputed_dns_payload[dns_max_payload_size];
+// } domainmapentry;
+//
+// // global variables
+// extern int            domain_count;
+// extern DomainMapEntry domain_map[MAX_DOMAINS];
 
 #endif // !DNS_PROTOCOL_H
